@@ -1,0 +1,17 @@
+v0: Original code
+v1: first try of OPENACC, with ability to run one GPU for each MPI rank.
+
+to Compile
+May need to modify pgi.mk and env.cshrc
+source env.cshrc
+cd exec.v0 
+setenv OMP_NUM_THREADS 1
+make OPENMP=ON
+./fyppm.x
+
+cd exec.v1
+make OPENACC=ON
+mpirun -np 1 ./fyppm.x  ( will run on one GPU)
+mpirun -np 2 ./fyppm.x  ( will run on two MPI ranks, one GPU for each MPI rank)
+
+
