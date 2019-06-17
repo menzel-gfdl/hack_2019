@@ -2,7 +2,7 @@ module fyppm_mod
 
  implicit none
  private
- public fyppm
+ public :: fyppm
 
  integer :: grid_type = 2
 
