@@ -1,6 +1,7 @@
 *.o
 *.mod
 gfdl_fyppm/src/fyppm
+run_*
 
 Makefile
 Makefile.in
