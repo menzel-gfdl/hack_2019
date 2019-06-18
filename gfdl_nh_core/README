@@ -1,0 +1,17 @@
+v0: Original code
+v1: first try of OPENACC and can only run on one MPI rank and one GPU
+
+to Compile
+May need to modify pgi.mk and env.cshrc
+source env.cshrc
+cd exec.v0 
+make 
+cd ../rundir
+../exec.v0/nh_core.x
+
+cd exec.v1
+make OPENACC=ON
+cd ../rundir
+../exec.v1/nh_core.x
+
+
