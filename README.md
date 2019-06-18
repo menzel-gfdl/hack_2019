@@ -6,6 +6,7 @@ The GNU autotools build system and a fortran compiler.
 
 # Configuring the environment
 ```
+$ source $MODULESHOME/init/bash
 $ module swap xl pgi/19.5
 ```
 
@@ -24,3 +25,15 @@ $ ./submit.sh <path to executable> <walltime in minutes> <# of MPI ranks> <# of 
 
 # Checking For Correctness
 TBD
+
+# Debugging
+Start ddt in the background on the login node, then use the submission script with the -d
+option:
+```
+$ module load forge/19.0.2
+$ ddt &
+$ ./submit.sh -d <path to executable> <walltime in minutes> <# of MPI ranks> <# of gpus>
+```
+Once the job starts running, a dialog box should appear in ddt asking if you'd like to
+accept a "reverse connection" from you job.  Click accept, then proceed to use ddt as
+normal.

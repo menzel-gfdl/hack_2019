@@ -2,7 +2,7 @@
 
 
 function usage() {
-    printf "usage: $0 [-h] [-n <name>] [-u] [-w <directory>] executable walltime ranks gpus\n"
+    printf "usage: $0 [-h] [-n <name>] [-u] [-w <directory>] [-d] executable walltime ranks gpus\n"
 }
 
 
@@ -17,6 +17,7 @@ ranks                              Number of MPI ranks to use.
 gpus                               Number of GPUs to use.
 
 Optional arguments:
+-d,--debug                         Attempt to the run the program in DDT.
 -h,--help                          Prints this help message.
 -n,--name <name>                   Name of the job.  Defaults to "job".
 -u,--unique                        Append timestamp on runscript.
@@ -35,6 +36,10 @@ workdir="/gpfs/wolf/gen127/scratch/$USER/princeton_gpu_hackathon"
 while [[ $# -gt 0 ]]; do
     arg="$1"
     case $arg in
+        -d|--debug)
+            debug="ddt --connect"
+            shift
+            ;;
         -h|--help)
             help_mesg
             exit 0
@@ -84,6 +89,11 @@ if [ ! -z "$unique" ]; then
     now=`date +%s`
     script="${script}.${now}"
 fi
+if [ -z "$debug" ]; then
+    cmd="jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus ./$execname"
+else
+    cmd="source $MODULESHOME/init/bash && module load forge/19.0.2 && $debug jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus ./$execname"
+fi
 cat > $script << EOF
 #!/bin/bash -xe
 #BSUB -P GEN127
@@ -96,7 +106,7 @@ cat > $script << EOF
 mkdir -p $workdir
 cp -f $executable $workdir
 cd $workdir
-jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus ./$execname
+$cmd
 EOF
 
 #Submit the script
