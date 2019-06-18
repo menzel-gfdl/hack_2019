@@ -19,7 +19,7 @@ $ make
 # Running
 A bash script is provided that will submit the job to the scheduler.  It can be run:
 ```
-./submit.sh <path to executable> <walltime in minutes> <# of MPI ranks> <# of gpus>
+$ ./submit.sh <path to executable> <walltime in minutes> <# of MPI ranks> <# of gpus>
 ```
 
 # Checking For Correctness
