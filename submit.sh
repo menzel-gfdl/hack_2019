@@ -2,7 +2,7 @@
 
 
 function usage() {
-    printf "usage: $0 [-h] [-n <name>] [-u] [-w <directory>] [-d] executable walltime ranks gpus\n"
+    printf "usage: $0 [-h] [-n <name>] [-u] [-w <directory>] [-d] [-p <filename>] executable walltime ranks gpus\n"
 }
 
 
@@ -20,6 +20,7 @@ Optional arguments:
 -d,--debug                         Attempt to the run the program in DDT.
 -h,--help                          Prints this help message.
 -n,--name <name>                   Name of the job.  Defaults to "job".
+-p,--profile <filename>            Name of the profile output file.
 -u,--unique                        Append timestamp on runscript.
 -w,--work-directory <directory>    Directory to run the executable in (will be created
                                    if it doesn't exist).  Defaults to 
@@ -47,6 +48,15 @@ while [[ $# -gt 0 ]]; do
         -n|--name)
             jobname="$2"
             if [ -z "$jobname" ]; then
+                usage
+                exit 1
+            fi
+            shift
+            shift
+            ;;
+        -p|--profile)
+            profile="$2"
+            if [ -z "$profile" ]; then
                 usage
                 exit 1
             fi
@@ -89,10 +99,12 @@ if [ ! -z "$unique" ]; then
     now=`date +%s`
     script="${script}.${now}"
 fi
-if [ -z "$debug" ]; then
-    cmd="jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus ./$execname"
-else
+if [ ! -z "$debug" ]; then
     cmd="source $MODULESHOME/init/bash && module load forge/19.0.2 && $debug jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus ./$execname"
+elif [ ! -z "$profile" ]; then
+    cmd="source $MODULESHOME/init/bash && module load cuda/9.2.148 && jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus nvprof -o $profile.%h.%p ./$execname"
+else
+    cmd="jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus ./$execname"
 fi
 cat > $script << EOF
 #!/bin/bash -xe
@@ -110,4 +122,15 @@ $cmd
 EOF
 
 #Submit the script
-bsub $script
+tmp1=`bsub $script`
+tmp2=${tmp1%%>*}
+id=${tmp2#Job <}
+
+#Output useful information.
+echo "Summary for job $jobname:"
+echo "-------------------------"
+echo "stdout/stderr  = $PWD/${jobname}.${id}"
+echo "executable     = $workdir/$execname"
+if [ ! -z "$profile" ]; then
+  echo "profile output = $workdir/$profile.*.*"
+fi
