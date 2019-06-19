@@ -42,7 +42,7 @@ Once the job starts running, a dialog box should appear in ddt asking if you'd l
 accept a "reverse connect" from you job.  Click accept, then proceed to use ddt as
 normal.
 
-#Profiling
+# Profiling
 The provided bash submission script also includes a profiling option (-p or --profile), which
 will allow the run the be profiled by nvprof:
 ```
