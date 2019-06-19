@@ -5,16 +5,16 @@
 ! Aug 11, 2010
 !
 program Main
+use iso_fortran_env, only: int64, output_unit, real32, real64
+use mpi
 #ifdef _OPENACC
 use openacc
 #endif
-use fyppm_mod
+use fyppm_mod, only: fp, fyppm
 
 implicit none
 
-include 'mpif.h'
-
-character(132) linebuf
+character(132) :: linebuf
 integer   :: i, j, k, info, myrank, mythread, omp_get_thread_num, iter
 
 integer :: ifirst, ilast, isd, ied
@@ -27,24 +27,22 @@ integer :: ny = 96
 
 integer :: jord, npy, ng
 
-real, allocatable, dimension (:,:,:) :: c
-real, allocatable, dimension (:,:,:) :: q
-real, allocatable, dimension (:,:,:) :: wk
-real, allocatable, dimension (:,:,:) :: area
-real, allocatable, dimension (:,:,:) :: al, bl, br, dq
-real, allocatable, dimension (:,:) :: dya
-real, allocatable, dimension (:,:,:) :: flux, dm
+real(kind=fp), allocatable, dimension (:,:,:) :: c
+real(kind=fp), allocatable, dimension (:,:,:) :: q
+real(kind=fp), allocatable, dimension (:,:,:) :: wk
+real(kind=fp), allocatable, dimension (:,:,:) :: area
+real(kind=fp), allocatable, dimension (:,:,:) :: al, bl, br, dq
+real(kind=fp), allocatable, dimension (:,:) :: dya
+real(kind=fp), allocatable, dimension (:,:,:) :: flux, dm
 
-real :: a, b
+real(kind=real64) :: time1, time2
 
-real(8) :: time1, time2, elapsed
-
-real :: ppm_limiter = 2.0
+real(kind=fp) :: ppm_limiter = 2.0_fp
 integer :: ndev
 integer :: npes, nxc, nyc, ipos, jpos
 integer :: istart, iend, jstart, jend
-real    :: gsum
-integer(KIND=8) :: gchksum
+real(kind=fp) :: gsum
+integer(kind=int64) :: gchksum
 
  call mpi_init(info)
  call mpi_comm_rank(mpi_comm_world, myrank, info)
@@ -102,7 +100,7 @@ if(myrank==0) print*, "ndev = ", ndev, ", npes = ", npes
   do k = 1, km
      do j = js, je+1
         do i = isd, ied
-           c(i,j,k) = 1.0+i*1.e-2+j*2.e-4+k*3*1.e-6
+           c(i,j,k) = 1.0_fp + i*1.e-2_fp + j*2.e-4_fp + k*3._fp*1.e-6_fp
         enddo
      enddo
   enddo
@@ -110,15 +108,15 @@ if(myrank==0) print*, "ndev = ", ndev, ", npes = ", npes
   do k = 1, km
      do j = jfirst, jlast+1
         do i = ifirst, ilast
-           wk(i,j,k) = 1.0+k*1.e-2+j*2.e-4+i*3*1.e-6
-           area(i,j,k) = 12.0+k*1.e-2+j*2.e-4+i*3*1.e-6
+           wk(i,j,k) = 1.0_fp + k*1.e-2_fp + j*2.e-4_fp + i*3._fp*1.e-6_fp
+           area(i,j,k) = 12.0_fp + k*1.e-2_fp + j*2.e-4_fp + i*3._fp*1.e-6_fp
         enddo
      enddo
   enddo
 
   do j = js, je
      do i = isd, ied
-        dya(i,j) = 2.0+i*1.e-2+j*2.e-4
+        dya(i,j) = 2.0_fp + i*1.e-2_fp + j*2.e-4_fp
      enddo
   enddo
 
@@ -134,8 +132,8 @@ if(myrank==0) print*, "ndev = ", ndev, ", npes = ", npes
 !$omp parallel do 
 !$acc kernels 
       do k=1,km
-        flux(:,:,k) = 1.0
-        dm  (:,:,k) = 1.0
+        flux(:,:,k) = 1.0_fp
+        dm  (:,:,k) = 1.0_fp
       enddo
 !$acc end kernels
       call fyppm(c,  q,  flux, jord, ifirst, ilast, jfirst, jlast, npy, dm, ppm_limiter, &
@@ -165,11 +163,11 @@ if(myrank==0) print*, "ndev = ", ndev, ", npes = ", npes
 !     write( linebuf,'(A)' ) 'expect   :  6.2082139432E+10'
      write( linebuf,'(A)' ) 'expect   :  9.6326547367E+10'
 
-     write( 0, *) trim(linebuf)
+     write(output_unit, *) trim(linebuf)
      write( linebuf,'(A,ES18.10)' )  'got      :', gsum
-     write( 0, *) trim(linebuf)
+     write(output_unit, *) trim(linebuf)
      write( linebuf,* )  'chksum      :', gchksum
-     write( 0, *) trim(linebuf)
+     write(output_unit, *) trim(linebuf)
      print *, ' elapsed time (secs) = ', time2 - time1
   endif
 
@@ -184,10 +182,10 @@ contains
 
 subroutine error_handler(errmsg)
   character(len=*), intent(in) :: errmsg
-
+  integer :: err
 
   write(*,*) "ERROR: ", trim(errmsg)
-  call MPI_ABORT()
+  call mpi_abort(mpi_comm_world, 1, err)
 
 end subroutine error_handler
 
@@ -210,9 +208,9 @@ idiv=1
 end subroutine define_layout
 
 function global_chksum(data)
-   real,             intent(in) :: data(:,:,:)
-   integer(kind=8) :: idata(size(data))
-   integer(kind=8) :: mold(1), global_chksum, sum_data
+   real(kind=fp),             intent(in) :: data(:,:,:)
+   integer(kind=int64) :: idata(size(data))
+   integer(kind=int64) :: mold(1), global_chksum, sum_data
    integer :: error
 
    idata = transfer(data, mold)
@@ -222,12 +220,20 @@ function global_chksum(data)
 end function global_chksum
 
 function global_sum(data)
-   real,             intent(in) :: data(:,:,:)
-   real :: sum_data, global_sum
+   real(kind=fp),             intent(in) :: data(:,:,:)
+   real(kind=fp) :: sum_data, global_sum
    integer :: error
+   integer :: s
 
+   if (fp .eq. real64) then
+     s = mpi_real8
+   elseif (fp .eq. real32) then
+     s = mpi_real4
+   else
+     call error_handler("floating point kind must be either real64 or real32")
+   endif
    sum_data = sum(data)
-   call MPI_ALLREDUCE(sum_data, global_sum, 1, MPI_REAL8, MPI_SUM, mpi_comm_world, error)
+   call MPI_ALLREDUCE(sum_data, global_sum, 1, s, MPI_SUM, mpi_comm_world, error)
 
 end function global_sum
 
