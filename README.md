@@ -5,7 +5,7 @@ This repository describes how to build/run kernels from FV3 on the OLCF Ascent s
 The GNU autotools build system and a fortran compiler.
 
 # Configuring the environment
-Since this project is targeting GPUs via OpenMP, we recommend configuring your environment
+Since this project is targeting GPUs via OpenACC, we recommend configuring your environment
 to use the PGI compiler.
 ```
 $ source $MODULESHOME/init/bash
