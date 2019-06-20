@@ -1,8 +1,10 @@
 # Princeton GPU Hackathon 2019
-This repository describes how to build/run kernels from FV3 on the OLCF Ascent system.
+This repository describes how to build/run 3 kernels (fyppm, fv_mapz, nh_core) from FV3
+on the OLCF Ascent system.
 
 # Requirements
-The GNU autotools build system and a fortran compiler.
+The GNU autotools build system and a fortran compiler.  The fv_mapz and nh_core kernels
+also require the netCDF fortran library.
 
 # Configuring the environment
 Since this project is targeting GPUs via OpenACC, we recommend configuring your environment
@@ -10,16 +12,24 @@ to use the PGI compiler.
 ```
 $ source $MODULESHOME/init/bash
 $ module swap xl pgi/19.5
+$ module load netcdf/4.6.1
+$ module load netcdf-fortran/4.4.4
 ```
 
 # Building
 This repository has been set up to use the GNU autotools build system.  Running
 ```
 $ autoreconf --install
-$ ./configure CC=mpicc FC=mpifort FCFLAGS="-g -acc -ta=nvidia:cc70 -Minfo=accel -Mcuda=lineinf"
+$ ./configure CC=mpicc CPPFLAGS="`pkg-config --cflags netcdf-fortran`" \
+              FC=mpifort FCFLAGS="-g -acc -ta=nvidia:cc70 -Minfo=accel -Mcuda=lineinf" \
+              LDFLAGS="`pkg-config --libs-only-L netcdf` `pkg-config --libs-only-L netcdf-fortran`" \
+              LIBS="`pkg-config --libs-only-l netcdf` `pkg-config --libs-only-l netcdf-fortran`"
 $ make
 ```
-should produce an OpenACC-enabled executable gfdl_fyppm/src/fyppm.
+should produce OpenACC-enabled executables:
+* gfdl_fyppm/src/fyppm.
+* gfdl_mapz/src/fv_mapz
+* gfdl_nh_core/src/nh_core
 
 # Running
 A bash script is provided that will submit the job to the scheduler.  It can be run:
@@ -28,6 +38,16 @@ $ ./submit.sh gfdl_fyppm/src/fyppm <walltime in minutes> <# of MPI ranks> <# of 
 ```
 
 # Checking For Correctness
+### fyppm
+A global sum is calculated at the end of the program and compared to a benchmark value.
+If the two values agree to within a specified tolerance, the test is considered to have
+run successfully and the program returns 0.  If not, then the program returns a non-zero
+value.
+
+### fv_mapz
+TBD
+
+### nh_core
 TBD
 
 # Debugging
