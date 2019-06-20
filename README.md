@@ -3,7 +3,7 @@ This repository describes how to build/run 3 routines (fyppm, fv_mapz, nh_core) 
 as standalone programs on the OLCF Ascent system.
 
 # Requirements
-The GNU autotools build system and a fortran compiler.  The fv_mapz and nh_core kernels
+The GNU autotools build system and a fortran compiler.  The fv_mapz and nh_core programs
 also require the netCDF fortran library.
 
 # Configuring the environment
