@@ -1,6 +1,8 @@
 *.o
 *.mod
 gfdl_fyppm/src/fyppm
+gfdl_mapz/src/fv_mapz
+gfdl_nh_core/src/nh_core
 run_*
 
 Makefile
