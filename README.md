@@ -21,7 +21,7 @@ This repository has been set up to use the GNU autotools build system.  Running
 ```
 $ autoreconf --install
 $ ./configure CC=mpicc CPPFLAGS="`pkg-config --cflags netcdf-fortran`" \
-              FC=mpifort FCFLAGS="-g -acc -ta=nvidia:cc70 -Minfo=accel -Mcuda=lineinf" \
+              FC=mpifort FCFLAGS="-g -O2 -acc -ta=nvidia:cc70 -Minfo=accel -Mcuda=lineinf -r8" \
               LDFLAGS="`pkg-config --libs-only-L netcdf` `pkg-config --libs-only-L netcdf-fortran`" \
               LIBS="`pkg-config --libs-only-l netcdf` `pkg-config --libs-only-l netcdf-fortran`"
 $ make
