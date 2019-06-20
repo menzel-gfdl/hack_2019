@@ -27,7 +27,7 @@ $ ./configure CC=mpicc CPPFLAGS="`pkg-config --cflags netcdf-fortran`" \
 $ make
 ```
 should produce OpenACC-enabled executables:
-* gfdl_fyppm/src/fyppm.
+* gfdl_fyppm/src/fyppm
 * gfdl_mapz/src/fv_mapz
 * gfdl_nh_core/src/nh_core
 
