@@ -19,7 +19,7 @@ gpus                               Number of GPUs to use.
 Optional arguments:
 -d,--debug                         Attempt to the run the program in DDT.
 -h,--help                          Prints this help message.
--n,--name <name>                   Name of the job.  Defaults to "job".
+-n,--name <name>                   Name of the job.  Defaults to the name of the executable.
 -p,--profile <filename>            Name of the profile output file.
 -u,--unique                        Append timestamp on runscript.
 -w,--work-directory <directory>    Directory to run the executable in (will be created
@@ -32,7 +32,6 @@ EOF
 #Parse command line args.
 pos_args=("" "" "" "")
 c=0
-jobname="job"
 workdir="/gpfs/wolf/gen127/scratch/$USER/princeton_gpu_hackathon"
 while [[ $# -gt 0 ]]; do
     arg="$1"
@@ -94,6 +93,9 @@ gpus=${pos_args[3]}
 
 #Create submission script.
 execname=`basename $executable`
+if [ -z "$jobname" ]; then
+    jobname="$execname"
+fi
 script="run_${execname}"
 d=`readlink -f $0`
 datadir=`dirname $d`
@@ -132,8 +134,9 @@ tmp2=${tmp1%%>*}
 id=${tmp2#Job <}
 
 #Output useful information.
-echo "Summary for job $jobname:"
+echo "$jobname submitted with properties:"
 echo "-------------------------"
+echo "id             = $id"
 echo "stdout/stderr  = $PWD/${jobname}.${id}"
 echo "executable     = $workdir/$execname"
 if [ ! -z "$profile" ]; then
