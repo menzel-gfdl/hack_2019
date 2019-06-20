@@ -95,6 +95,8 @@ gpus=${pos_args[3]}
 #Create submission script.
 execname=`basename $executable`
 script="run_${execname}"
+d=`readlink -f $0`
+datadir=`dirname $d`
 if [ ! -z "$unique" ]; then
     now=`date +%s`
     script="${script}.${now}"
@@ -118,6 +120,9 @@ cat > $script << EOF
 mkdir -p $workdir
 cp -f $executable $workdir
 cd $workdir
+ln -s -f /gpfs/wolf/gen127/proj-shared/rlmenzel/Riem_Solver_c_data.nc Riem_Solver_c_data.nc
+ln -s -f /gpfs/wolf/gen127/proj-shared/rlmenzel/fv_mapz_data.nc fv_mapz_data.nc
+ln -s -f $datadir/data/input.nml input.nml
 $cmd
 EOF
 
