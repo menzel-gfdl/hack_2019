@@ -1,6 +1,6 @@
 # Princeton GPU Hackathon 2019
-This repository describes how to build/run 3 kernels (fyppm, fv_mapz, nh_core) from FV3
-on the OLCF Ascent system.
+This repository describes how to build/run 3 routines (fyppm, fv_mapz, nh_core) from FV3
+as standalone programs on the OLCF Ascent system.
 
 # Requirements
 The GNU autotools build system and a fortran compiler.  The fv_mapz and nh_core kernels
