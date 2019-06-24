@@ -106,7 +106,8 @@ fi
 if [ ! -z "$debug" ]; then
     cmd="source $MODULESHOME/init/bash && module load forge/19.0.2 && $debug jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus ./$execname"
 elif [ ! -z "$profile" ]; then
-    cmd="source $MODULESHOME/init/bash && module load cuda/9.2.148 && jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus nvprof -o $profile.%h.%p ./$execname"
+#   cmd="source $MODULESHOME/init/bash && module load cuda/9.2.148 && jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus nvprof -o $profile.%h.%p ./$execname"
+    cmd="source $MODULESHOME/init/bash && module load cuda/9.2.148 && jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus nvprof --log-file $profile.%h.%p --print-gpu-trace ./$execname"
 else
     cmd="jsrun --nrs 1 --tasks_per_rs $ranks --cpu_per_rs $ranks --gpu_per_rs $gpus ./$execname"
 fi
