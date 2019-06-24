@@ -37,6 +37,9 @@ integer :: info, myrank
 integer :: start_time, end_time, cr, cm
 real    :: rate, total_time
 integer :: ncid, did_axis, vid
+real :: gz_diff !< Difference between actual value and benchmark.
+real :: pef_diff !< Difference between actual value and benchmark.
+real, parameter :: tolerance = 1.e-8
 
 call system_clock(count_rate=cr)
 call system_clock(count_max=cm)
@@ -187,9 +190,18 @@ write(output_unit, '(a,es18.10)') "Sum of gz_out  = ", sum(gz_out)
 write(output_unit, '(a,es18.10)') "Sum of gz      = ", sum(gz)  
 write(output_unit, '(a,es18.10)') "Sum of pef_out = ", sum(pef_out)
 write(output_unit, '(a,es18.10)') "Sum of pef     = ", sum(pef)  
-write(output_unit, '(a,es18.10)') "max diff of gz = ", maxval(abs(gz-gz_out))
-write(output_unit, '(a,es18.10)') "max relative diff of pef= ", maxval(abs((pef(isc-1:iec+1,jsc-1:jec+1,:)- &
-                                 pef_out(isc-1:iec+1,jsc-1:jec+1,:))/pef(isc-1:iec+1,jsc-1:jec+1,:)))
+
+gz_diff = maxval(abs(gz-gz_out))
+write(output_unit, '(a,es18.10)') "max diff of gz = ", gz_diff
+if (gz_diff .gt. tolerance) then
+  call error("gz diff greater than tolerance.")
+endif
+pef_diff = maxval(abs((pef(isc-1:iec+1,jsc-1:jec+1,:)- &
+                  pef_out(isc-1:iec+1,jsc-1:jec+1,:))/pef(isc-1:iec+1,jsc-1:jec+1,:)))
+write(output_unit, '(a,es18.10)') "max relative diff of pef= ", pef_diff
+if (pef_diff .gt. tolerance) then
+  call error("pef diff greater than tolerance.")
+endif
 write(output_unit, *) "Elapsed time (s) = ", (end_time-start_time)/rate
 
 
