@@ -21,7 +21,7 @@
 ! This revision may actually produce rounding level differences due to the elimination of KS to compute
 ! pressure level for remapping.
 module fv_mapz_mod
-
+use test, only: in_layer, map_level_k, with_fractional_parts
 
   implicit none
 
@@ -138,26 +138,44 @@ contains
     integer:: i,j,k 
     integer:: nt, iq, n, kmp, kp, k_next
 
+
+
+    !rlm - extra memory needed.
+    integer, dimension(is:ie, js:je, km+1) :: k1 !< Upper bound index for pe2 relative to pe1.
+    integer, dimension(is:ie, js:je, km+1) :: k2 !< Upper bound index for pe2 relative to pe1.
+    real, dimension(is:ie, js:je+1, km+1) :: pn1 !< Analog of pe1
+
     k1k = rdgas/cv_air   ! akap / (1.-akap) = rg/Cv=0.4
     rg = rdgas
     rcp = 1./ cp
     rrg = -rdgas/grav
-!$ACC kernels
-!$ACC loop collapse(3)
+
+!$acc kernels
     do k = 1, km+1
        do j=js,je+1
           do i=is,ie
+             !Swap j and k.
              pe1(i,j,k) = pe(i,k,j)
           enddo
        enddo
     enddo
-!$ACC loop collapse(2)
     do j=js,je+1
        do i=is,ie
+          !Store TOA and surface pressures.
           pe2(i,j,   1) = ptop
           pe2(i,j,km+1) = pe(i,km+1,j)
        enddo
     enddo
+    ! update ps
+    do j=js,je
+       do i=is,ie
+          ps(i,j) = pe1(i,j,km+1)
+       enddo
+    enddo
+
+!$acc end kernels
+
+
     if ( kord_tm < 0 ) then
        ! Note: pt at this stage is Theta_v
        if ( hydrostatic ) then
@@ -203,12 +221,6 @@ contains
        enddo
     endif
 
-    ! update ps
-    do j=js,je
-       do i=is,ie
-          ps(i,j) = pe1(i,j,km+1)
-       enddo
-    enddo
     !
     ! Hybrid sigma-P coordinate:
     !
@@ -254,37 +266,50 @@ contains
           enddo
        enddo
     enddo
-!$ACC end kernels
-    if ( kord_tm<0 ) then
-       !----------------------------------
-       ! Map t using logp 
-       !----------------------------------
-          call map_scalar(km,  peln,  pt, gz,   &
-               km,  pn2,           pt,              &
-               is, ie, js, je, isd, ied, jsd, jed, 1, abs(kord_tm), t_min)
-!    else
-       ! Map pt using pe
-!          call map1_ppm (km,  pe1,  pt,  gz,       &
-!               km,  pe2,  pt,                  &
-!               is, ie, js, je, isd, ied, jsd, jed, 1, abs(kord_tm))
-    endif
-    !----------------
-    ! Map constituents
-    !----------------
-    ! Remap one tracer at a time
-    do iq=1,nq
-          call map1_q2(km, pe1, q(isd,jsd,1,iq),     &
-               km, pe2, q2, dp2,             &
-               is, ie, 0, kord_tr(iq), js, je, isd, ied, jsd, jed, 0.)
-        
-       do k=1,km
-          do j=js,je
-             do i=is,ie
-                q(i,j,k,iq) = q2(i,j,k)
-             enddo
-          enddo
-       enddo
+  
+
+
+  !Find the level remapping bounds.  This is the same for all tracers.
+  call map_level_k(is, ie, js, je, km, km, pe1, pe2, k1, k2)
+
+  if (kord_tm .lt. 0) then
+    do k = 1, km+1
+      do j = js, je
+        do i = is, ie
+          !Swap j and k
+          pn1(i,j,k) = peln(i,k,j)
+        enddo
+      enddo
     enddo
+    !Map t using logp 
+    call map_scalar(km, pn1, pt, gz, km, pn2, pt, &
+                    is, ie, js, je, isd, ied, jsd, jed, 1, abs(kord_tm), t_min, &
+                    k1, k2)
+    write(6,*) "new:", sum(pt)
+    call map_scalar_old(km, peln, pt, gz, km, pn2, pt, &
+                        is, ie, js, je, isd, ied, jsd, jed, 1, abs(kord_tm), t_min)
+    write(6,*) "old:", sum(pt)
+  else
+    !Map pt using pe
+!   call map1_ppm (km, pe1, pt, gz, km, pe2, pt, &
+!                  is, ie, js, je, isd, ied, jsd, jed, 1, abs(kord_tm))
+  endif
+
+  !Map constituents.
+  do iq = 1, nq
+    call map1_q2(km, pe1, q(isd,jsd,1,iq), km, pe2, q2, &
+                 is, ie, 0, kord_tr(iq), js, je, isd, ied, jsd, jed, 0., k1, k2)
+    do k = 1, km
+      do j = js, je
+        do i = is, ie
+          q(i,j,k,iq) = q2(i,j,k)
+        enddo
+      enddo
+    enddo
+  enddo
+
+
+
 
     if ( .not. hydrostatic ) then
        ! Remap vertical wind:
@@ -295,6 +320,12 @@ contains
        call map1_ppm (km,   pe1, delz,  gz,   &
             km,   pe2, delz,              &
             is, ie, js, je, isd,  ied,  jsd,  jed,  1, abs(kord_tm))
+
+
+
+
+
+
        do k=1,km
           do j=js,je
              do i=is,ie
@@ -626,7 +657,6 @@ contains
 
   subroutine pkez(km, ifirst, ilast, jfirst, jlast, &
        pe, pk, akap, peln, pkz, ptop)
-!$ACC routine seq
     ! !INPUT PARAMETERS:
     integer, intent(in):: km
     integer, intent(in):: ifirst, ilast        ! Latitude strip
@@ -684,7 +714,7 @@ contains
 
 
 
-  subroutine map_scalar( km,   pe1,    q1,   qs,           &
+  subroutine map_scalar_old( km,   pe1,    q1,   qs,           &
        kn,   pe2,    q2,   i1, i2, j1, j2,      &
        ibeg, iend, jbeg, jend, iv,  kord, q_min)
 
@@ -724,7 +754,6 @@ contains
     integer i, j, k, l, m, k0
     logical keep_going
 
-!$ACC kernels
     do k=1,km
        do j=j1, j2
           do i=i1,i2
@@ -733,18 +762,16 @@ contains
           enddo
        enddo
     enddo
-!$ACC end kernels
+write(6,*) "dp1", dp1(:,:,1)
     ! Compute vertical subgrid distribution
     if ( kord >7 ) then
        call scalar_profile( qs, q4, dp1, km, i1, i2, j1, j2, iv, kord, q_min )
     else
        call ppm_profile( q4, dp1, km, i1, i2, j1, j2, iv, kord )
     endif
-!$ACC kernels
     do j=j1,j2
        do i=i1,i2
           k0 = 1
-          !$acc loop seq
           do k=1,kn
              keep_going = .true.
              do l=k0,km
@@ -784,9 +811,8 @@ contains
           enddo
        enddo
     enddo
-!$ACC end kernels
 
-  end subroutine map_scalar
+  end subroutine map_scalar_old
 
 
   subroutine map1_ppm( km,   pe1,    q1,   qs,           &
@@ -888,10 +914,10 @@ contains
   end subroutine map1_ppm
 
 
-  subroutine map1_q2(km,   pe1,   q1,            &
+  subroutine map1_q2_old(km,   pe1,   q1,            &
        kn,   pe2,   q2,   dp2,     &
        i1,   i2,    iv,   kord, j1, j2, &
-       ibeg, iend, jbeg, jend, q_min )
+       ibeg, iend, jbeg, jend, q_min)
 
     ! !INPUT PARAMETERS:
     integer, intent(in) :: j1, j2
@@ -913,12 +939,13 @@ contains
     real, intent(in) ::  q_min
     ! !INPUT/OUTPUT PARAMETERS:
     real, intent(inout):: q2(i1:i2,j1:j2+1,kn) ! Field output
+
     ! !LOCAL VARIABLES:
     real   qs(i1:i2,j1:j2)
-    real   dp1(i1:i2,j1:j2,km)
     real   q4(4,i1:i2,j1:j2,km)
     real   pl, pr, qsum, dp, esl
 
+    real, dimension(i1:i2, j1:j2, km) :: dp1
     integer i, j, k, l, m, k0
     logical :: keep_going
 
@@ -936,7 +963,6 @@ contains
     else
        call ppm_profile( q4, dp1, km, i1, i2, j1, j2, iv, kord )
     endif
-
     ! Mapping
     do j=j1,j2
        do i=i1,i2
@@ -982,7 +1008,125 @@ contains
        enddo
     enddo
 
+  end subroutine map1_q2_old
+
+
+  subroutine map1_q2(km,   pe1,   q1,            &
+       kn,   pe2,   q2,   &
+       i1,   i2,    iv,   kord, j1, j2, &
+       ibeg, iend, jbeg, jend, q_min, k1, k2)
+
+    ! !INPUT PARAMETERS:
+    integer, intent(in) :: j1, j2
+    integer, intent(in) :: i1, i2
+    integer, intent(in) :: ibeg, iend, jbeg, jend
+    integer, intent(in) :: iv                ! Mode: 0 ==  constituents 1 == ???
+    integer, intent(in) :: kord
+    integer, intent(in) :: km                ! Original vertical dimension
+    integer, intent(in) :: kn                ! Target vertical dimension
+
+    real, intent(in) ::  pe1(i1:i2,j1:j2+1, km+1)     ! pressure at layer edges 
+    ! (from model top to bottom surface)
+    ! in the original vertical coordinate
+    real, intent(in) ::  pe2(i1:i2,j1:j2+1,kn+1)     ! pressure at layer edges 
+    ! (from model top to bottom surface)
+    ! in the new vertical coordinate
+    real, intent(in) ::  q1(ibeg:iend,jbeg:jend,km) ! Field input
+    real, intent(in) ::  q_min
+    ! !INPUT/OUTPUT PARAMETERS:
+    real, intent(inout):: q2(i1:i2,j1:j2+1,kn) ! Field output
+
+    !rlm
+    integer, dimension(i1:i2, j1:j2+1, km+1), intent(in) :: k1
+    integer, dimension(i1:i2, j1:j2+1, km+1), intent(in) :: k2
+!   real, dimension(i1:i2, j1:j2, km), intent(in) :: dp1
+
+    ! !LOCAL VARIABLES:
+    real   qs(i1:i2,j1:j2)
+    real   q4(4,i1:i2,j1:j2,km)
+    real   pl, pr, qsum, dp, esl
+
+    real, dimension(i1:i2, j1:j2, km) :: dp1
+    integer i, j, k, l, m, k0
+    logical :: keep_going
+
+    do j=j1,j2
+       do k=1,km
+          do i=i1,i2
+             dp1(i,j,k) = pe1(i,j,k+1) - pe1(i,j,k)
+             q4(1,i,j,k) = q1(i,j,k)
+          enddo
+       enddo
+    enddo
+    ! Compute vertical subgrid distribution
+    if ( kord >7 ) then
+       call  scalar_profile( qs, q4, dp1, km, i1, i2, j1, j2, iv, kord, q_min )
+    else
+       call ppm_profile( q4, dp1, km, i1, i2, j1, j2, iv, kord )
+    endif
+    call in_layer(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
+    call with_fractional_parts(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
   end subroutine map1_q2
+
+
+subroutine map_scalar(km, pe1, q1, qs, kn, pe2, q2, i1, i2, j1, j2, &
+                      ibeg, iend, jbeg, jend, iv, kord, q_min, k1, k2)
+  integer, intent(in) :: i1 ! Starting longitude
+  integer, intent(in) :: i2 ! Finishing longitude
+  integer, intent(in) :: j1 ! Starting longitude
+  integer, intent(in) :: j2 ! Finishing longitude
+  integer, intent(in) :: iv ! Mode: 0 == constituents  1 == temp
+    !       2 == remap temp with cs scheme
+  integer, intent(in) :: kord ! Method order
+  integer, intent(in) :: ibeg, iend, jbeg, jend
+  integer, intent(in) :: km ! Original vertical dimension
+  integer, intent(in) :: kn ! Target vertical dimension
+  real, intent(in) :: qs(i1:i2,j1:j2+1) ! bottom BC
+  real, intent(in) :: pe1(i1:i2,j1:j2+1,km+1) ! pressure at layer edges 
+                                              ! (from model top to bottom surface)
+                                              ! in the original vertical coordinate
+  real, intent(in) :: pe2(i1:i2,j1:j2+1,kn+1) ! pressure at layer edges 
+                                              ! (from model top to bottom surface)
+                                              ! in the new vertical coordinate
+  real, intent(in) :: q1(ibeg:iend,jbeg:jend,km) ! Field input
+  real, intent(inout) :: q2(ibeg:iend,jbeg:jend,kn) ! Field output
+  real, intent(in) :: q_min
+  integer, dimension(i1:i2, j1:j2+1, km+1), intent(in) :: k1
+  integer, dimension(i1:i2, j1:j2+1, km+1), intent(in) :: k2
+
+  real :: dp1(i1:i2,j1:j2,km)
+  real :: q4(4,i1:i2,j1:j2,km)
+  real :: pl, pr, qsum, dp, esl
+  integer :: i
+  integer :: j
+  integer :: k
+
+  do k = 1, km
+    do j = j1, j2
+      do i = i1, i2
+        dp1(i,j,k) = pe1(i,j,k+1) - pe1(i,j,k)
+        q4(1,i,j,k) = q1(i,j,k)
+      enddo
+    enddo
+  enddo
+
+write(6,*) "dp1", dp1(:,:,1)
+
+  !Compute vertical subgrid distribution
+  if (kord .gt. 7) then
+    call scalar_profile(qs, q4, dp1, km, i1, i2, j1, j2, iv, kord, q_min)
+  else
+    call ppm_profile(q4, dp1, km, i1, i2, j1, j2, iv, kord)
+  endif
+  call in_layer(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
+  call with_fractional_parts(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
+end subroutine map_scalar
+
+
+
+
+
+
 
 
  subroutine scalar_profile(qs, a4, delp, km, i1, i2, j1, j2, iv, kord, qmin)
@@ -1007,7 +1151,6 @@ contains
    real   pmp_1, lac_1, pmp_2, lac_2
    integer i, j, k, im
 
-!$acc kernels
    if ( iv .eq. -2 ) then
       do j=j1,j2
          do i=i1,i2
@@ -1074,10 +1217,8 @@ contains
          enddo
       enddo
    endif
-!$ACC end kernels
    !----- Perfectly linear scheme --------------------------------
    if ( abs(kord) > 16 ) then
-!$ACC kernels
       do k=1,km
          do j=j1,j2
             do i=i1,i2
@@ -1087,10 +1228,8 @@ contains
             enddo
          enddo
       enddo
-!$ACC end kernels
       return
    endif
-!$ACC kernels
 
    !----- Perfectly linear scheme --------------------------------
    !------------------
@@ -1196,30 +1335,24 @@ contains
          enddo
       enddo
    endif
-!$ACC end kernels
    if ( iv/=2 ) then
-!$ACC kernels
       do j=j1,j2
          do i=i1,i2
             a4(4,i,j,1) = 3.*(2.*a4(1,i,j,1) - (a4(2,i,j,1)+a4(3,i,j,1)))
          enddo
       enddo
-!$ACC end kernels
       call cs_limiters(i1,i2,j1,j2,1,1,extm(i1,j1,1), a4(1,i1,j1,1), 1)
    endif
    ! k=2
-!$ACC kernels
    do j=j1,j2
       do i=i1,i2
          a4(4,i,j,2) = 3.*(2.*a4(1,i,j,2) - (a4(2,i,j,2)+a4(3,i,j,2)))
       enddo
    enddo
-!$ACC end kernels
    call cs_limiters(i1,i2,j1,j2,2,2,extm(i1,j1,2), a4(1,i1,j1,2), 2)
    !-------------------------------------
    ! Huynh's 2nd constraint for interior:
    !-------------------------------------
-!$ACC kernels
    if ( abs(kord)<9 ) then
       do k=3,km-2
          do j=j1,j2
@@ -1409,13 +1542,11 @@ contains
          enddo
       enddo
    endif
-!$acc end kernels
    ! Additional constraint to ensure positivity
    if ( iv==0 ) call cs_limiters(i1,i2,j1,j2,3,km-2, extm(i1,j1,3), a4(1,i1,j1,3), 0)
    !----------------------------------
    ! Bottom layer subgrid constraints:
    !----------------------------------
-!$ACC kernels
    if ( iv==0 ) then
       do j=j1,j2
          do i=i1,i2
@@ -1437,7 +1568,6 @@ contains
          enddo
       enddo
    enddo
-!$ACC end kernels
    call cs_limiters(i1,i2,j1,j2,km-1,km-1, extm(i1,j1,km-1), a4(1,i1,j1,km-1), 2)
    call cs_limiters(i1,i2,j1,j2,km,km, extm(i1,j1,km), a4(1,i1,j1,km), 1)
 
@@ -1869,7 +1999,6 @@ contains
    ! !LOCAL VARIABLES:
    real  da1, da2, a6da
    integer i,j,k
-!$acc kernels
    if ( iv==0 ) then
       ! Positive definite constraint
       do j=j1,j2
@@ -1948,13 +2077,11 @@ contains
          enddo
       enddo
    endif
-!$ACC end kernels
  end subroutine cs_limiters
 
 
 
  subroutine ppm_profile(a4, delp, km, i1, i2, j1, j2, iv, kord)
-!$ACC routine seq
    ! !INPUT PARAMETERS:
    integer, intent(in):: iv      ! iv =-1: winds
    ! iv = 0: positive definite scalars
@@ -2242,7 +2369,6 @@ contains
 
 
  subroutine ppm_limiters(i1,i2,j1,j2,k1,k2,dm, a4, lmt)
-!$ACC routine seq
    ! !INPUT PARAMETERS:
    integer, intent(in) :: i1,i2,j1,j2,k1,k2
    real , intent(in):: dm(i1:i2,j1:j2,k1:k2)     ! the linear slope
