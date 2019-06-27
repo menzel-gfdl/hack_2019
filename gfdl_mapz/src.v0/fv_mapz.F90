@@ -276,9 +276,11 @@ contains
       if ( nq > 0 ) then
 ! Remap one tracer at a time
          do iq=1,nq
+            do k = 1,10
              call map1_q2(km, pe1, q(isd,jsd,1,iq),     &
                           km, pe2, q2, dp2,             &
                           is, ie, 0, kord_tr(iq), j, isd, ied, jsd, jed, 0.)
+            enddo
             do k=1,km
                do i=is,ie
                   q(i,j,k,iq) = q2(i,k)
