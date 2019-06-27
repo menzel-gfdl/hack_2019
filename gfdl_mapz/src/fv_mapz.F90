@@ -140,17 +140,16 @@ contains
 
 
 
-    !rlm - extra memory needed.
-    integer, dimension(is:ie, js:je, km+1) :: k1 !< Upper bound index for pe2 relative to pe1.
-    integer, dimension(is:ie, js:je, km+1) :: k2 !< Upper bound index for pe2 relative to pe1.
-    real, dimension(is:ie, js:je+1, km+1) :: pn1 !< Analog of pe1
+  !rlm - extra memory needed.
+  integer, dimension(is:ie+1, js:je+1, km+1) :: k1 !< Upper bound index for pe2 relative to pe1.
+  integer, dimension(is:ie+1, js:je+1, km+1) :: k2 !< Upper bound index for pe2 relative to pe1.
+  real, dimension(is:ie, js:je, km+1) :: pn1 !< Analog of pe1
 
     k1k = rdgas/cv_air   ! akap / (1.-akap) = rg/Cv=0.4
     rg = rdgas
     rcp = 1./ cp
     rrg = -rdgas/grav
 
-!$acc kernels
     do k = 1, km+1
        do j=js,je+1
           do i=is,ie
@@ -173,7 +172,6 @@ contains
        enddo
     enddo
 
-!$acc end kernels
 
 
     if ( kord_tm < 0 ) then
@@ -267,8 +265,6 @@ contains
        enddo
     enddo
   
-
-
   !Find the level remapping bounds.  This is the same for all tracers.
   call map_level_k(is, ie, js, je, km, km, pe1, pe2, k1, k2)
 
@@ -283,12 +279,7 @@ contains
     enddo
     !Map t using logp 
     call map_scalar(km, pn1, pt, gz, km, pn2, pt, &
-                    is, ie, js, je, isd, ied, jsd, jed, 1, abs(kord_tm), t_min, &
-                    k1, k2)
-    write(6,*) "new:", sum(pt)
-    call map_scalar_old(km, peln, pt, gz, km, pn2, pt, &
-                        is, ie, js, je, isd, ied, jsd, jed, 1, abs(kord_tm), t_min)
-    write(6,*) "old:", sum(pt)
+                    is, ie, js, je, isd, ied, jsd, jed, 1, abs(kord_tm), t_min, k1, k2)
   else
     !Map pt using pe
 !   call map1_ppm (km, pe1, pt, gz, km, pe2, pt, &
@@ -297,7 +288,7 @@ contains
 
   !Map constituents.
   do iq = 1, nq
-    call map1_q2(km, pe1, q(isd,jsd,1,iq), km, pe2, q2, &
+    call map1_q2(km, pe1, q(:,:,:,iq), km, pe2, q2, &
                  is, ie, 0, kord_tr(iq), js, je, isd, ied, jsd, jed, 0., k1, k2)
     do k = 1, km
       do j = js, je
@@ -308,32 +299,21 @@ contains
     enddo
   enddo
 
-
-
-
-    if ( .not. hydrostatic ) then
-       ! Remap vertical wind:
-       call map1_ppm (km,   pe1,  w,  ws,   &
-            km,   pe2,  w,              &
-            is, ie, js, je, isd, ied, jsd, jed, -2, kord_wz)
-       ! Remap delz for hybrid sigma-p coordinate
-       call map1_ppm (km,   pe1, delz,  gz,   &
-            km,   pe2, delz,              &
-            is, ie, js, je, isd,  ied,  jsd,  jed,  1, abs(kord_tm))
-
-
-
-
-
-
-       do k=1,km
-          do j=js,je
-             do i=is,ie
-                delz(i,j,k) = -delz(i,j,k)*dp2(i,j,k)
-             enddo
-          enddo
-       enddo
-    endif
+  if (.not. hydrostatic) then
+    !Remap vertical wind.
+    call map1_ppm(km, pe1, w, ws, km, pe2, w, &
+                  is, ie, js, je, isd, ied, jsd, jed, -2, kord_wz, k1, k2)
+    !Remap delz for hybrid sigma-p coordinate
+    call map1_ppm(km, pe1, delz, gz, km, pe2, delz, &
+                  is, ie, js, je, isd, ied, jsd, jed, 1, abs(kord_tm), k1, k2)
+    do k = 1, km
+      do j = js, je
+        do i = is, ie
+          delz(i,j,k) = -delz(i,j,k)*dp2(i,j,k)
+        enddo
+      enddo
+    enddo
+  endif
 
     !----------
     ! Update pk
@@ -466,9 +446,12 @@ contains
           enddo
        enddo
     enddo
+
+    !Find the level remapping bounds.  This is the same for all tracers.
+    call map_level_k(is, ie, js, je+1, km, km, pe0, pe3, k1, k2)
     call map1_ppm( km, pe0,   u,   gz,   &
             km, pe3,   u,               &
-            is, ie, js, je+1, isd, ied, jsd, jed+1, -1, kord_mt)
+            is, ie, js, je+1, isd, ied, jsd, jed+1, -1, kord_mt, k1, k2)
     !------
     ! map v
     !------
@@ -487,9 +470,11 @@ contains
           enddo
        enddo
     enddo
+    !Find the level remapping bounds.  This is the same for all tracers.
+    call map_level_k(is, ie+1, js, je, km, km, pe0, pe3, k1, k2)
     call map1_ppm (km, pe0,  v, gz,    &
             km, pe3,  v, is, ie+1,    &
-            js, je, isd, ied+1, jsd, jed, -1, kord_mt)
+            js, je, isd, ied+1, jsd, jed, -1, kord_mt, k1, k2)
     do k=1,km
        do j=js,je+1
           do i=is,ie
@@ -714,359 +699,104 @@ contains
 
 
 
-  subroutine map_scalar_old( km,   pe1,    q1,   qs,           &
-       kn,   pe2,    q2,   i1, i2, j1, j2,      &
-       ibeg, iend, jbeg, jend, iv,  kord, q_min)
 
-    ! iv=1
-    integer, intent(in) :: i1                ! Starting longitude
-    integer, intent(in) :: i2                ! Finishing longitude
-    integer, intent(in) :: j1                ! Starting longitude
-    integer, intent(in) :: j2                ! Finishing longitude
-    integer, intent(in) :: iv                ! Mode: 0 == constituents  1 == temp
-    !       2 == remap temp with cs scheme
-    integer, intent(in) :: kord              ! Method order
-    integer, intent(in) :: ibeg, iend, jbeg, jend
-    integer, intent(in) :: km                ! Original vertical dimension
-    integer, intent(in) :: kn                ! Target vertical dimension
-    real, intent(in) ::   qs(i1:i2,j1:j2+1)       ! bottom BC
-    real, intent(in) ::  pe1(i1:i2,km+1,j1:j2)  ! pressure at layer edges 
-    ! (from model top to bottom surface)
-    ! in the original vertical coordinate
-    real, intent(in) ::  pe2(i1:i2,j1:j2+1,kn+1)  ! pressure at layer edges 
-    ! (from model top to bottom surface)
-    ! in the new vertical coordinate
-    real, intent(in) ::    q1(ibeg:iend,jbeg:jend,km) ! Field input
-    ! !INPUT/OUTPUT PARAMETERS:
-    real, intent(inout)::  q2(ibeg:iend,jbeg:jend,kn) ! Field output
-    real, intent(in):: q_min
 
-    ! !DESCRIPTION:
-    ! IV = 0: constituents
-    ! pe1: pressure at layer edges (from model top to bottom surface)
-    !      in the original vertical coordinate
-    ! pe2: pressure at layer edges (from model top to bottom surface)
-    !      in the new vertical coordinate
-    ! !LOCAL VARIABLES:
-    real    dp1(i1:i2,j1:j2,km)
-    real   q4(4,i1:i2,j1:j2,km)
-    real    pl, pr, qsum, dp, esl
-    integer i, j, k, l, m, k0
-    logical keep_going
+subroutine map1_ppm(km, pe1, q1, qs, kn, pe2, q2, i1, i2,       &
+                    j1, j2, ibeg, iend, jbeg, jend, iv, kord, k1, k2)
+  integer, intent(in) :: i1 !Starting longitude
+  integer, intent(in) :: i2 !Finishing longitude
+  integer, intent(in) :: j1 !Starting latitude
+  integer, intent(in) :: j2 !Finishing latitude
+  integer, intent(in) :: iv !Mode: 0 == constituents  1 == ???
+                            !2 == remap temp with cs scheme
+  integer, intent(in) :: kord              ! Method order
+  integer, intent(in) :: ibeg, iend, jbeg, jend
+  integer, intent(in) :: km !Original vertical dimension
+  integer, intent(in) :: kn !Target vertical dimension
+  real, intent(in) :: qs(i1:, j1:) !bottom BC
+  real, intent(in) :: pe1(i1:, j1:, :) !pressure at layer edges 
+                                       !(from model top to bottom surface)
+                                       !in the original vertical coordinate
+  real, intent(in) :: pe2(i1:, j1:, :) !pressure at layer edges
+                                       !(from model top to bottom surface)
+                                       !in the new vertical coordinate
+  real, intent(in) :: q1(ibeg:, jbeg:, :) !Field input
+  real, intent(inout) :: q2(ibeg:, jbeg:, :) ! Field output
+  integer, dimension(i1:, j1:, :), intent(in) :: k1
+  integer, dimension(i1:, j1:, :), intent(in) :: k2
 
-    do k=1,km
-       do j=j1, j2
-          do i=i1,i2
-             dp1(i,j,k) = pe1(i,k+1,j) - pe1(i,k,j)
-             q4(1,i,j,k) = q1(i,j,k)
-          enddo
-       enddo
+  real, dimension(i1:i2, j1:j2, km) :: dp1
+  real, dimension(4, i1:i2, j1:j2, km) :: q4
+  integer :: i
+  integer :: j
+  integer :: k
+
+  do k = 1, km
+    do j= j1, j2
+      do i = i1, i2
+        dp1(i,j,k) = pe1(i,j,k+1) - pe1(i,j,k)
+        q4(1,i,j,k) = q1(i,j,k)
+      enddo
     enddo
-write(6,*) "dp1", dp1(:,:,1)
-    ! Compute vertical subgrid distribution
-    if ( kord >7 ) then
-       call scalar_profile( qs, q4, dp1, km, i1, i2, j1, j2, iv, kord, q_min )
-    else
-       call ppm_profile( q4, dp1, km, i1, i2, j1, j2, iv, kord )
-    endif
-    do j=j1,j2
-       do i=i1,i2
-          k0 = 1
-          do k=1,kn
-             keep_going = .true.
-             do l=k0,km
-                ! locate the top edge: pe2(i,j,k)
-                if( keep_going .and. pe2(i,j,k) >= pe1(i,l,j) .and. pe2(i,j,k) <= pe1(i,l+1,j) ) then
-                   pl = (pe2(i,j,k)-pe1(i,l,j)) / dp1(i,j,l)
-                   if( pe2(i,j,k+1) <= pe1(i,l+1,j) ) then
-                      ! entire new grid is within the original grid
-                      pr = (pe2(i,j,k+1)-pe1(i,l,j)) / dp1(i,j,l)
-                      q2(i,j,k) = q4(2,i,j,l) + 0.5*(q4(4,i,j,l)+q4(3,i,j,l)-q4(2,i,j,l))  &
-                           *(pr+pl)-q4(4,i,j,l)*r3*(pr*(pr+pl)+pl**2)
-                      k0 = l
-                   else
-                      ! Fractional area...
-                      qsum = (pe1(i,l+1,j)-pe2(i,j,k))*(q4(2,i,j,l)+0.5*(q4(4,i,j,l)+   &
-                           q4(3,i,j,l)-q4(2,i,j,l))*(1.+pl)-q4(4,i,j,l)*           &
-                           (r3*(1.+pl*(1.+pl))))
-                      do m=l+1,km
-                         ! locate the bottom edge: pe2(i,k+1)
-                         if( pe2(i,j,k+1) > pe1(i,m+1,j) ) then
-                            ! Whole layer
-                            qsum = qsum + dp1(i,j,m)*q4(1,i,j,m)
-                         else
-                            dp = pe2(i,j,k+1)-pe1(i,m,j)
-                            esl = dp / dp1(i,j,m)
-                            qsum = qsum + dp*(q4(2,i,j,m)+0.5*esl*               &
-                                 (q4(3,i,j,m)-q4(2,i,j,m)+q4(4,i,j,m)*(1.-r23*esl)))
-                            k0 = m
-                            exit
-                         endif
-                      enddo
-                      q2(i,j,k) = qsum / ( pe2(i,j,k+1) - pe2(i,j,k) )
-                   endif
-                   keep_going = .false.
-                endif
-             enddo
-          enddo
-       enddo
+  enddo
+
+  !Compute vertical subgrid distribution.
+  if (kord .gt. 7) then
+    call cs_profile(qs, q4, dp1, km, i1, i2, j1, j2, iv, kord)
+  else
+    call ppm_profile(q4, dp1, km, i1, i2, j1, j2, iv, kord)
+  endif
+  call in_layer(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, &
+                q2(i1:,j1:,:))
+  call with_fractional_parts(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, &
+                             q2(i1:,j1:,:))
+end subroutine map1_ppm
+
+
+subroutine map1_q2(km, pe1, q1, kn, pe2, q2, &
+                   i1, i2, iv, kord, j1, j2, &
+                   ibeg, iend, jbeg, jend, q_min, k1, k2)
+  integer, intent(in) :: j1, j2
+  integer, intent(in) :: i1, i2
+  integer, intent(in) :: ibeg, iend, jbeg, jend
+  integer, intent(in) :: iv !Mode: 0 ==  constituents 1 == ???
+  integer, intent(in) :: kord
+  integer, intent(in) :: km !Original vertical dimension
+  integer, intent(in) :: kn !Target vertical dimension
+  real, intent(in) :: pe1(i1:, j1:, :) !pressure at layer edges 
+                                       !(from model top to bottom surface)
+                                       !in the original vertical coordinate
+  real, intent(in) ::  pe2(i1:, j1:, :) !pressure at layer edges 
+                                        !(from model top to bottom surface)
+                                        !in the new vertical coordinate
+  real, intent(in) :: q1(ibeg:, jbeg:, :) !Field input
+  real, intent(in) :: q_min
+  real, intent(inout) :: q2(i1:, j1:, :) !Field output
+  integer, dimension(i1:, j1:, :), intent(in) :: k1
+  integer, dimension(i1:, j1:, :), intent(in) :: k2
+
+  real, dimension(i1:i2, j1:j2) :: qs
+  real, dimension(4, i1:i2, j1:j2, km) :: q4
+  real, dimension(i1:i2, j1:j2, km) :: dp1
+  integer :: i, j, k
+
+  do k = 1, km
+    do j = j1, j2
+      do i = i1, i2
+        dp1(i,j,k) = pe1(i,j,k+1) - pe1(i,j,k)
+        q4(1,i,j,k) = q1(i,j,k)
+      enddo
     enddo
-
-  end subroutine map_scalar_old
-
-
-  subroutine map1_ppm( km,   pe1,    q1,   qs,           &
-       kn,   pe2,    q2,   i1, i2,       &
-       j1, j2, ibeg, iend, jbeg, jend, iv,  kord)
-    integer, intent(in) :: i1                ! Starting longitude
-    integer, intent(in) :: i2                ! Finishing longitude
-    integer, intent(in) :: j1                ! Starting latitude
-    integer, intent(in) :: j2                ! Finishing latitude
-    integer, intent(in) :: iv                ! Mode: 0 == constituents  1 == ???
-    !       2 == remap temp with cs scheme
-    integer, intent(in) :: kord              ! Method order
-    integer, intent(in) :: ibeg, iend, jbeg, jend
-    integer, intent(in) :: km                ! Original vertical dimension
-    integer, intent(in) :: kn                ! Target vertical dimension
-    real, intent(in) ::   qs(i1:,j1:)       ! bottom BC
-    real, intent(in) ::  pe1(i1:,j1:,:)  ! pressure at layer edges 
-    ! (from model top to bottom surface)
-    ! in the original vertical coordinate
-    real, intent(in) ::  pe2(i1:,j1:,:)  ! pressure at layer edges 
-    ! (from model top to bottom surface)
-    ! in the new vertical coordinate
-    real, intent(in) ::    q1(ibeg:iend,jbeg:jend,km) ! Field input
-    ! !INPUT/OUTPUT PARAMETERS:
-    real, intent(inout)::  q2(ibeg:iend,jbeg:jend,kn) ! Field output
-
-    ! !DESCRIPTION:
-    ! IV = 0: constituents
-    ! pe1: pressure at layer edges (from model top to bottom surface)
-    !      in the original vertical coordinate
-    ! pe2: pressure at layer edges (from model top to bottom surface)
-    !      in the new vertical coordinate
-    ! !LOCAL VARIABLES:
-    real    dp1(i1:i2,j1:j2,km)
-    real   q4(4,i1:i2,j1:j2,km)
-    real    pl, pr, qsum, dp, esl
-    integer i, j, k, l, m, k0
-    logical :: keep_going 
-
-    do k=1,km
-       do j=j1,j2
-          do i=i1,i2
-             dp1(i,j,k) = pe1(i,j,k+1) - pe1(i,j,k)
-             q4(1,i,j,k) = q1(i,j,k)
-          enddo
-       enddo
-    enddo
-
-    ! Compute vertical subgrid distribution
-    if ( kord >7 ) then
-       call  cs_profile( qs, q4, dp1, km, i1, i2, j1, j2, iv, kord )
-    else
-       call ppm_profile( q4, dp1, km, i1, i2, j1, j2, iv, kord )
-    endif
-
-    do j=j1,j2
-       do i=i1,i2
-          k0 = 1
-          do k=1,kn
-             keep_going = .true.
-             do l=k0,km
-                ! locate the top edge: pe2(i,j,k)
-                if( pe2(i,j,k) >= pe1(i,j,l) .and. pe2(i,j,k) <= pe1(i,j,l+1) ) then
-                   pl = (pe2(i,j,k)-pe1(i,j,l)) / dp1(i,j,l)
-                   if( pe2(i,j,k+1) <= pe1(i,j,l+1) ) then
-                      ! entire new grid is within the original grid
-                      pr = (pe2(i,j,k+1)-pe1(i,j,l)) / dp1(i,j,l)
-                      q2(i,j,k) = q4(2,i,j,l) + 0.5*(q4(4,i,j,l)+q4(3,i,j,l)-q4(2,i,j,l))  &
-                           *(pr+pl)-q4(4,i,j,l)*r3*(pr*(pr+pl)+pl**2)
-                      k0 = l
-                   else
-                      ! Fractional area...
-                      qsum = (pe1(i,j,l+1)-pe2(i,j,k))*(q4(2,i,j,l)+0.5*(q4(4,i,j,l)+   &
-                           q4(3,i,j,l)-q4(2,i,j,l))*(1.+pl)-q4(4,i,j,l)*           &
-                           (r3*(1.+pl*(1.+pl))))
-                      do m=l+1,km
-                         ! locate the bottom edge: pe2(i,j,k+1)
-                         if( pe2(i,j,k+1) > pe1(i,j,m+1) ) then
-                            ! Whole layer
-                            qsum = qsum + dp1(i,j,m)*q4(1,i,j,m)
-                         else
-                            dp = pe2(i,j,k+1)-pe1(i,j,m)
-                            esl = dp / dp1(i,j,m)
-                            qsum = qsum + dp*(q4(2,i,j,m)+0.5*esl*               &
-                                 (q4(3,i,j,m)-q4(2,i,j,m)+q4(4,i,j,m)*(1.-r23*esl)))
-                            k0 = m
-                            exit
-                         endif
-                      enddo
-                      q2(i,j,k) = qsum / ( pe2(i,j,k+1) - pe2(i,j,k) )
-                   endif
-                   keep_going = .false.
-                endif
-             enddo
-          enddo
-       enddo
-    enddo
-
-  end subroutine map1_ppm
-
-
-  subroutine map1_q2_old(km,   pe1,   q1,            &
-       kn,   pe2,   q2,   dp2,     &
-       i1,   i2,    iv,   kord, j1, j2, &
-       ibeg, iend, jbeg, jend, q_min)
-
-    ! !INPUT PARAMETERS:
-    integer, intent(in) :: j1, j2
-    integer, intent(in) :: i1, i2
-    integer, intent(in) :: ibeg, iend, jbeg, jend
-    integer, intent(in) :: iv                ! Mode: 0 ==  constituents 1 == ???
-    integer, intent(in) :: kord
-    integer, intent(in) :: km                ! Original vertical dimension
-    integer, intent(in) :: kn                ! Target vertical dimension
-
-    real, intent(in) ::  pe1(i1:i2,j1:j2+1, km+1)     ! pressure at layer edges 
-    ! (from model top to bottom surface)
-    ! in the original vertical coordinate
-    real, intent(in) ::  pe2(i1:i2,j1:j2+1,kn+1)     ! pressure at layer edges 
-    ! (from model top to bottom surface)
-    ! in the new vertical coordinate
-    real, intent(in) ::  q1(ibeg:iend,jbeg:jend,km) ! Field input
-    real, intent(in) ::  dp2(i1:i2,j1:j2+1,kn)
-    real, intent(in) ::  q_min
-    ! !INPUT/OUTPUT PARAMETERS:
-    real, intent(inout):: q2(i1:i2,j1:j2+1,kn) ! Field output
-
-    ! !LOCAL VARIABLES:
-    real   qs(i1:i2,j1:j2)
-    real   q4(4,i1:i2,j1:j2,km)
-    real   pl, pr, qsum, dp, esl
-
-    real, dimension(i1:i2, j1:j2, km) :: dp1
-    integer i, j, k, l, m, k0
-    logical :: keep_going
-
-    do j=j1,j2
-       do k=1,km
-          do i=i1,i2
-             dp1(i,j,k) = pe1(i,j,k+1) - pe1(i,j,k)
-             q4(1,i,j,k) = q1(i,j,k)
-          enddo
-       enddo
-    enddo
-    ! Compute vertical subgrid distribution
-    if ( kord >7 ) then
-       call  scalar_profile( qs, q4, dp1, km, i1, i2, j1, j2, iv, kord, q_min )
-    else
-       call ppm_profile( q4, dp1, km, i1, i2, j1, j2, iv, kord )
-    endif
-    ! Mapping
-    do j=j1,j2
-       do i=i1,i2
-          k0 = 1
-          do k=1,kn
-             keep_going = .true.
-             do l=k0,km
-                ! locate the top edge: pe2(i,j,k)
-                if(keep_going .and. pe2(i,j,k) >= pe1(i,j,l) .and. pe2(i,j,k) <= pe1(i,j,l+1)) then
-                   pl = (pe2(i,j,k)-pe1(i,j,l)) / dp1(i,j,l)
-                   if(pe2(i,j,k+1) <= pe1(i,j,l+1)) then
-                      ! entire new grid is within the original grid
-                      pr = (pe2(i,j,k+1)-pe1(i,j,l)) / dp1(i,j,l)
-                      q2(i,j,k) = q4(2,i,j,l) + 0.5*(q4(4,i,j,l)+q4(3,i,j,l)-q4(2,i,j,l))  &
-                           *(pr+pl)-q4(4,i,j,l)*r3*(pr*(pr+pl)+pl**2)
-                      k0 = l
-                   else
-                      ! Fractional area...
-                      qsum = (pe1(i,j,l+1)-pe2(i,j,k))*(q4(2,i,j,l)+0.5*(q4(4,i,j,l)+   &
-                           q4(3,i,j,l)-q4(2,i,j,l))*(1.+pl)-q4(4,i,j,l)*           &
-                           (r3*(1.+pl*(1.+pl))))
-                      do m=l+1,km
-                         ! locate the bottom edge: pe2(i,j,k+1)
-                         if(pe2(i,j,k+1) > pe1(i,j,m+1) ) then
-                            ! Whole layer..
-                            qsum = qsum + dp1(i,j,m)*q4(1,i,j,m)
-                         else
-                            dp = pe2(i,j,k+1)-pe1(i,j,m)
-                            esl = dp / dp1(i,j,m)
-                            qsum = qsum + dp*(q4(2,i,j,m)+0.5*esl*               &
-                                 (q4(3,i,j,m)-q4(2,i,j,m)+q4(4,i,j,m)*(1.-r23*esl)))
-                            k0 = m
-                            !                   q2(i,j,k) = qsum / dp2(i,j,k)
-                            exit
-                         endif
-                      enddo
-                      q2(i,j,k) = qsum / dp2(i,j,k)
-                   endif
-                   keep_going = .false.
-                endif
-             enddo
-          enddo
-       enddo
-    enddo
-
-  end subroutine map1_q2_old
-
-
-  subroutine map1_q2(km,   pe1,   q1,            &
-       kn,   pe2,   q2,   &
-       i1,   i2,    iv,   kord, j1, j2, &
-       ibeg, iend, jbeg, jend, q_min, k1, k2)
-
-    ! !INPUT PARAMETERS:
-    integer, intent(in) :: j1, j2
-    integer, intent(in) :: i1, i2
-    integer, intent(in) :: ibeg, iend, jbeg, jend
-    integer, intent(in) :: iv                ! Mode: 0 ==  constituents 1 == ???
-    integer, intent(in) :: kord
-    integer, intent(in) :: km                ! Original vertical dimension
-    integer, intent(in) :: kn                ! Target vertical dimension
-
-    real, intent(in) ::  pe1(i1:i2,j1:j2+1, km+1)     ! pressure at layer edges 
-    ! (from model top to bottom surface)
-    ! in the original vertical coordinate
-    real, intent(in) ::  pe2(i1:i2,j1:j2+1,kn+1)     ! pressure at layer edges 
-    ! (from model top to bottom surface)
-    ! in the new vertical coordinate
-    real, intent(in) ::  q1(ibeg:iend,jbeg:jend,km) ! Field input
-    real, intent(in) ::  q_min
-    ! !INPUT/OUTPUT PARAMETERS:
-    real, intent(inout):: q2(i1:i2,j1:j2+1,kn) ! Field output
-
-    !rlm
-    integer, dimension(i1:i2, j1:j2+1, km+1), intent(in) :: k1
-    integer, dimension(i1:i2, j1:j2+1, km+1), intent(in) :: k2
-!   real, dimension(i1:i2, j1:j2, km), intent(in) :: dp1
-
-    ! !LOCAL VARIABLES:
-    real   qs(i1:i2,j1:j2)
-    real   q4(4,i1:i2,j1:j2,km)
-    real   pl, pr, qsum, dp, esl
-
-    real, dimension(i1:i2, j1:j2, km) :: dp1
-    integer i, j, k, l, m, k0
-    logical :: keep_going
-
-    do j=j1,j2
-       do k=1,km
-          do i=i1,i2
-             dp1(i,j,k) = pe1(i,j,k+1) - pe1(i,j,k)
-             q4(1,i,j,k) = q1(i,j,k)
-          enddo
-       enddo
-    enddo
-    ! Compute vertical subgrid distribution
-    if ( kord >7 ) then
-       call  scalar_profile( qs, q4, dp1, km, i1, i2, j1, j2, iv, kord, q_min )
-    else
-       call ppm_profile( q4, dp1, km, i1, i2, j1, j2, iv, kord )
-    endif
-    call in_layer(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
-    call with_fractional_parts(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
-  end subroutine map1_q2
+  enddo
+  !Compute vertical subgrid distribution
+  if (kord .gt. 7) then
+    call scalar_profile(qs, q4, dp1, km, i1, i2, j1, j2, iv, kord, q_min)
+  else
+    call ppm_profile(q4, dp1, km, i1, i2, j1, j2, iv, kord)
+  endif
+  call in_layer(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
+  call with_fractional_parts(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
+end subroutine map1_q2
 
 
 subroutine map_scalar(km, pe1, q1, qs, kn, pe2, q2, i1, i2, j1, j2, &
@@ -1076,27 +806,26 @@ subroutine map_scalar(km, pe1, q1, qs, kn, pe2, q2, i1, i2, j1, j2, &
   integer, intent(in) :: j1 ! Starting longitude
   integer, intent(in) :: j2 ! Finishing longitude
   integer, intent(in) :: iv ! Mode: 0 == constituents  1 == temp
-    !       2 == remap temp with cs scheme
+                            ! 2 == remap temp with cs scheme
   integer, intent(in) :: kord ! Method order
   integer, intent(in) :: ibeg, iend, jbeg, jend
   integer, intent(in) :: km ! Original vertical dimension
   integer, intent(in) :: kn ! Target vertical dimension
-  real, intent(in) :: qs(i1:i2,j1:j2+1) ! bottom BC
-  real, intent(in) :: pe1(i1:i2,j1:j2+1,km+1) ! pressure at layer edges 
-                                              ! (from model top to bottom surface)
-                                              ! in the original vertical coordinate
-  real, intent(in) :: pe2(i1:i2,j1:j2+1,kn+1) ! pressure at layer edges 
-                                              ! (from model top to bottom surface)
-                                              ! in the new vertical coordinate
-  real, intent(in) :: q1(ibeg:iend,jbeg:jend,km) ! Field input
-  real, intent(inout) :: q2(ibeg:iend,jbeg:jend,kn) ! Field output
+  real, intent(in) :: qs(i1:, j1:) ! bottom BC
+  real, intent(in) :: pe1(i1:, j1:, :) ! pressure at layer edges 
+                                       ! (from model top to bottom surface)
+                                       ! in the original vertical coordinate
+  real, intent(in) :: pe2(i1:, j1:, :) ! pressure at layer edges 
+                                       ! (from model top to bottom surface)
+                                       ! in the new vertical coordinate
+  real, intent(in) :: q1(ibeg:, jbeg:, :) ! Field input
+  real, intent(inout) :: q2(ibeg:, jbeg:, :) ! Field output
   real, intent(in) :: q_min
-  integer, dimension(i1:i2, j1:j2+1, km+1), intent(in) :: k1
-  integer, dimension(i1:i2, j1:j2+1, km+1), intent(in) :: k2
+  integer, dimension(i1:, j1:, :), intent(in) :: k1
+  integer, dimension(i1:, j1:, :), intent(in) :: k2
 
-  real :: dp1(i1:i2,j1:j2,km)
-  real :: q4(4,i1:i2,j1:j2,km)
-  real :: pl, pr, qsum, dp, esl
+  real, dimension(i1:i2, j1:j2, km) :: dp1
+  real, dimension(4, i1:i2, j1:j2, km) :: q4
   integer :: i
   integer :: j
   integer :: k
@@ -1109,17 +838,16 @@ subroutine map_scalar(km, pe1, q1, qs, kn, pe2, q2, i1, i2, j1, j2, &
       enddo
     enddo
   enddo
-
-write(6,*) "dp1", dp1(:,:,1)
-
   !Compute vertical subgrid distribution
   if (kord .gt. 7) then
     call scalar_profile(qs, q4, dp1, km, i1, i2, j1, j2, iv, kord, q_min)
   else
     call ppm_profile(q4, dp1, km, i1, i2, j1, j2, iv, kord)
   endif
-  call in_layer(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
-  call with_fractional_parts(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
+  call in_layer(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, &
+                q2(i1:,j1:,:))
+  call with_fractional_parts(i1, i2, j1, j2, km, kn, pe1, pe2, k1, k2, dp1, q4, &
+                             q2(i1:,j1:,:))
 end subroutine map_scalar
 
 

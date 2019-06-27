@@ -11,7 +11,7 @@ implicit none
 integer :: nx = 48
 integer :: ny = 48
 integer :: nz = 64
-integer :: num_iter = 1
+integer :: num_iter = 100
 character(len=128) :: input_file = "fv_mapz_data.nc"
 
 namelist /fv_mapz_nml/ nx, ny, nz, num_iter, input_file

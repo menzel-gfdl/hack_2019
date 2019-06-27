@@ -20,14 +20,13 @@ subroutine map_level_k(is, ie, js, je, km, kn, pe1, pe2, k1, k2)
   integer, intent(in) :: je
   integer, intent(in) :: km
   integer, intent(in) :: kn
-  real(kind=fp), dimension(is:ie, js:je+1, km+1), intent(in) :: pe1
-  real(kind=fp), dimension(is:ie, js:je+1, km+1), intent(in) :: pe2
-  integer, dimension(is:ie, js:je, km+1), intent(inout) :: k1
-  integer, dimension(is:ie, js:je, km+1), intent(inout) :: k2
+  real(kind=fp), dimension(is:, js:, :), intent(in) :: pe1
+  real(kind=fp), dimension(is:, js:, :), intent(in) :: pe2
+  integer, dimension(is:, js:, :), intent(inout) :: k1
+  integer, dimension(is:, js:, :), intent(inout) :: k2
 
   integer :: i
   integer :: j
-  integer :: k
 
   do j = js, je
     do i = is, ie
@@ -46,16 +45,14 @@ subroutine bounds_old(km, kn, array, val, lower, upper)
   integer, dimension(:), intent(inout) :: upper
 
   integer :: k0
-  logical :: keep_going
   integer :: k
   integer :: l
   integer :: m
 
   k0 = 1
   do k = 1, kn
-    keep_going = .true.
     do l = k0, km
-      if (keep_going .and. val(k) .ge. array(l) .and. val(k) .le. array(l+1)) then
+      if (val(k) .ge. array(l) .and. val(k) .le. array(l+1)) then
         lower(k) = l
         if (val(k+1) .le. array(l+1)) then
           upper(k) = l
@@ -69,7 +66,7 @@ subroutine bounds_old(km, kn, array, val, lower, upper)
             endif
           enddo
         endif
-        keep_going = .false.
+        exit
       endif
     enddo
   enddo
@@ -83,13 +80,13 @@ subroutine in_layer(is, ie, js, je, km, kn, pe1, pe2, k1, k2, dp1, q4, q2)
   integer, intent(in) :: je
   integer, intent(in) :: km
   integer, intent(in) :: kn
-  real(kind=fp), dimension(is:ie, js:je+1, km+1), intent(in) :: pe1
-  real(kind=fp), dimension(is:ie, js:je+1, kn+1), intent(in) :: pe2
-  integer, dimension(is:ie, js:je, km+1), intent(in) :: k1
-  integer, dimension(is:ie, js:je, km+1), intent(in) :: k2
-  real(kind=fp), dimension(is:ie, js:je, km), intent(in) :: dp1
-  real(kind=fp), dimension(4, is:ie, js:je, km), intent(in) :: q4
-  real(kind=fp), dimension(is:ie, js:je+1, kn), intent(inout) :: q2
+  real(kind=fp), dimension(is:, js:, :), intent(in) :: pe1
+  real(kind=fp), dimension(is:, js:, :), intent(in) :: pe2
+  integer, dimension(is:, js:, :), intent(in) :: k1
+  integer, dimension(is:, js:, :), intent(in) :: k2
+  real(kind=fp), dimension(is:, js:, :), intent(in) :: dp1
+  real(kind=fp), dimension(:, is:, js:, :), intent(in) :: q4
+  real(kind=fp), dimension(is:, js:, :), intent(inout) :: q2
 
   real(kind=fp) :: pl
   real(kind=fp) :: pr
@@ -124,13 +121,13 @@ subroutine with_fractional_parts(is, ie, js, je, km, kn, pe1, pe2, k1, k2, dp1, 
   integer, intent(in) :: je
   integer, intent(in) :: km
   integer, intent(in) :: kn
-  real(kind=fp), dimension(is:ie, js:je+1, km+1), intent(in) :: pe1
-  real(kind=fp), dimension(is:ie, js:je+1, kn+1), intent(in) :: pe2
-  integer, dimension(is:ie, js:je, km+1), intent(in) :: k1
-  integer, dimension(is:ie, js:je, km+1), intent(in) :: k2
-  real(kind=fp), dimension(is:ie, js:je, km), intent(in) :: dp1
-  real(kind=fp), dimension(4, is:ie, js:je, km), intent(in) :: q4
-  real(kind=fp), dimension(is:ie, js:je+1, kn), intent(inout) :: q2
+  real(kind=fp), dimension(is:, js:, :), intent(in) :: pe1
+  real(kind=fp), dimension(is:, js:, :), intent(in) :: pe2
+  integer, dimension(is:, js:, :), intent(in) :: k1
+  integer, dimension(is:, js:, :), intent(in) :: k2
+  real(kind=fp), dimension(is:, js:, :), intent(in) :: dp1
+  real(kind=fp), dimension(:, is:, js:, :), intent(in) :: q4
+  real(kind=fp), dimension(is:, js:, :), intent(inout) :: q2
 
   real(kind=fp) :: pl
   real(kind=fp) :: qsum
