@@ -15,7 +15,7 @@ fv_mapz.o: ${SRCROOT}/fv_mapz.F90
 ./fv_mapz.F90: ${SRCROOT}/fv_mapz.F90
 	cp ${SRCROOT}/fv_mapz.F90 .
 ./Main.F90: ${SRCROOT}/Main.F90
-	cp /lustre/f1/unswept/Zhi.Liang/tests/gfdl_fv_mapz/src/./Main.F90 .
+	cp $(SRCROOT)/Main.F90 .
 SRC = ${SRCROOT}/fv_mapz.F90 ${SRCROOT}/Main.F90
 OBJ = fv_mapz.o Main.o
 OFF = ${SRCROOT}/fv_mapz.F90 ${SRCROOT}/Main.F90
