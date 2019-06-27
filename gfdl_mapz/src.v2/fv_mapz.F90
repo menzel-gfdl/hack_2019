@@ -133,7 +133,7 @@ contains
   real, dimension(is:ie,km+1):: pe1, pe2, pk1, pk2, pn2, phis
   real, dimension(is:ie+1,km+1):: pe0, pe3
   real, dimension(is:ie):: gz, cvm, qv
-  integer :: k1(is:ie,km), k2(is:ie,km), alg(is:ie,km)
+  integer :: k1(is:ie,km), k2(is:ie,km)
   real rcp, rg, tmp, tpe, rrg, bkh, dtmp, k1k
   logical:: fast_mp_consv
   integer:: i,j,k 
@@ -257,13 +257,15 @@ contains
       enddo
    enddo
 
+   call map_layerk (km, pe1, km, pe2, is, ie, k1, k2)
    if ( kord_tm<0 ) then
 !----------------------------------
 ! Map t using logp 
  !----------------------------------
          call map_scalar(km,  peln(is,1,j),  pt, gz,   &
                          km,  pn2,           pt,              &
-                         is, ie, j, isd, ied, jsd, jed, 1, abs(kord_tm), t_min)
+                         is, ie, j, isd, ied, jsd, jed, 1, abs(kord_tm), t_min, &
+                         k1, k2)
    else
 ! Map pt using pe
          call map1_ppm (km,  pe1,  pt,  gz,       &
@@ -275,14 +277,13 @@ contains
 ! Map constituents
 !----------------
       if ( nq > 0 ) then
-         call map1_layerk (km, pe1, km, pe2, is, ie, k1, k2, alg)
 ! Remap one tracer at a time
          do iq=1,nq
             do k=1,10
-             call map1_q2(km, pe1, q(isd,jsd,1,iq),     &
-                          km, pe2, q2, dp2,             &
-                          is, ie, 0, kord_tr(iq), j, isd, ied, jsd, jed, 0., &
-                          k1, k2, alg)
+             call map_scalar(km,  peln(is,1,j),  pt, gz,   &
+                         km,  pn2,           pt,              &
+                         is, ie, j, isd, ied, jsd, jed, 0, kord_tr(iq), 0., &
+                         k1, k2)
             enddo
             do k=1,km
                do i=is,ie
@@ -661,10 +662,10 @@ endif        ! end last_step check
  end subroutine pkez
 
 
-
- subroutine map_scalar( km,   pe1,    q1,   qs,           &
-                        kn,   pe2,    q2,   i1, i2,       &
-                         j,  ibeg, iend, jbeg, jend, iv,  kord, q_min)
+subroutine map_scalar( km,   pe1,    q1,   qs,           &
+                       kn,   pe2,    q2,   i1, i2,       &
+                       j,  ibeg, iend, jbeg, jend, iv,  kord, q_min, &
+                       k1, k2)
 ! iv=1
  integer, intent(in) :: i1                ! Starting longitude
  integer, intent(in) :: i2                ! Finishing longitude
@@ -683,6 +684,7 @@ endif        ! end last_step check
                                        ! (from model top to bottom surface)
                                        ! in the new vertical coordinate
  real, intent(in) ::    q1(ibeg:iend,jbeg:jend,km) ! Field input
+ integer, intent(in) :: k1(i1:i2,km), k2(i1:i2,km)
 ! !INPUT/OUTPUT PARAMETERS:
  real, intent(inout)::  q2(ibeg:iend,jbeg:jend,kn) ! Field output
  real, intent(in):: q_min
@@ -697,7 +699,7 @@ endif        ! end last_step check
    real    dp1(i1:i2,km)
    real   q4(4,i1:i2,km)
    real    pl, pr, qsum, dp, esl
-   integer i, k, l, m, k0
+   integer i, k, l, m, k0, lp
 
    do k=1,km
       do i=i1,i2
@@ -713,49 +715,42 @@ endif        ! end last_step check
         call ppm_profile( q4, dp1, km, i1, i2, iv, kord )
    endif
 
+! Mapping
   do i=i1,i2
-     k0 = 1
-     do 555 k=1,kn
-      do l=k0,km
-! locate the top edge: pe2(i,k)
-      if( pe2(i,k) >= pe1(i,l) .and. pe2(i,k) <= pe1(i,l+1) ) then
+     do k=1,kn
+         l  = k1(i,k)
+         lp = k2(i,k)
          pl = (pe2(i,k)-pe1(i,l)) / dp1(i,l)
-         if( pe2(i,k+1) <= pe1(i,l+1) ) then
+         if ((lp-l) == 1) then
 ! entire new grid is within the original grid
             pr = (pe2(i,k+1)-pe1(i,l)) / dp1(i,l)
             q2(i,j,k) = q4(2,i,l) + 0.5*(q4(4,i,l)+q4(3,i,l)-q4(2,i,l))  &
                        *(pr+pl)-q4(4,i,l)*r3*(pr*(pr+pl)+pl**2)
-               k0 = l
-               goto 555
-         else
+         elseif ((lp-l) > 1) then
 ! Fractional area...
             qsum = (pe1(i,l+1)-pe2(i,k))*(q4(2,i,l)+0.5*(q4(4,i,l)+   &
                     q4(3,i,l)-q4(2,i,l))*(1.+pl)-q4(4,i,l)*           &
                      (r3*(1.+pl*(1.+pl))))
-              do m=l+1,km
+            do m=l+1,lp
 ! locate the bottom edge: pe2(i,k+1)
-                 if( pe2(i,k+1) > pe1(i,m+1) ) then
-! Whole layer
+                 if (m < lp) then
+                     ! Whole layer
                      qsum = qsum + dp1(i,m)*q4(1,i,m)
                  else
                      dp = pe2(i,k+1)-pe1(i,m)
-                     esl = dp / dp1(i,m)
-                     qsum = qsum + dp*(q4(2,i,m)+0.5*esl*               &
-                           (q4(3,i,m)-q4(2,i,m)+q4(4,i,m)*(1.-r23*esl)))
-                     k0 = m
-                     goto 123
+                    esl = dp / dp1(i,m)
+                   qsum = qsum + dp*(q4(2,i,m)+0.5*esl*               &
+                         (q4(3,i,m)-q4(2,i,m)+q4(4,i,m)*(1.-r23*esl)))
                  endif
-              enddo
-              goto 123
+            enddo
+            q2(i,j,k) = qsum / ( pe2(i,k+1) - pe2(i,k) )
          endif
-      endif
-      enddo
-123   q2(i,j,k) = qsum / ( pe2(i,k+1) - pe2(i,k) )
-555   continue
+     enddo
   enddo
 
  end subroutine map_scalar
 
+ 
 
  subroutine map1_ppm( km,   pe1,    q1,   qs,           &
                       kn,   pe2,    q2,   i1, i2,       &
@@ -850,7 +845,7 @@ endif        ! end last_step check
  end subroutine map1_ppm
 
 
- subroutine map1_layerk (km, pe1, kn, pe2, i1, i2, k1, k2, alg)
+ subroutine map_layerk (km, pe1, kn, pe2, i1, i2, k1, k2)
       integer, intent(in) :: km                ! Original vertical dimension
       integer, intent(in) :: kn                ! Target vertical dimension
       integer, intent(in) :: i1, i2
@@ -861,12 +856,11 @@ endif        ! end last_step check
                                                ! (from model top to bottom surface)
                                                ! in the new vertical coordinate
 ! !INPUT/OUTPUT PARAMETERS:
-      integer, intent(inout) :: k1(i1:i2,km), k2(i1:i2,km), alg(i1:i2,km)
+      integer, intent(inout) :: k1(i1:i2,km), k2(i1:i2,km)
 ! !LOCAL VARIABLES:
       integer i, k, l, m, k0, lp
 
 ! Mapping
-      alg(:,:) = 0 
       do i=i1,i2
          k0 = 1
       do 555 k=1,kn
@@ -878,12 +872,10 @@ endif        ! end last_step check
                k0 = l
                k1(i,k) = l
                k2(i,k) = l+1
-               alg(i,k) = 1
                goto 555
          else
 ! locate the top...
             k1(i,k) = l
-            alg(i,k) = 2
             do m=l+1,km
 ! locate the bottom...
                if(pe2(i,k+1) <= pe1(i,m+1) ) then
@@ -899,94 +891,7 @@ endif        ! end last_step check
 555   continue
       enddo
 
- end subroutine map1_layerk
-
-
-
- subroutine map1_q2(km,   pe1,   q1,            &
-                    kn,   pe2,   q2,   dp2,     &
-                    i1,   i2,    iv,   kord, j, &
-                    ibeg, iend, jbeg, jend, q_min, &
-                    k1, k2, alg)
-
-
-! !INPUT PARAMETERS:
-      integer, intent(in) :: j
-      integer, intent(in) :: i1, i2
-      integer, intent(in) :: ibeg, iend, jbeg, jend
-      integer, intent(in) :: iv                ! Mode: 0 ==  constituents 1 == ???
-      integer, intent(in) :: kord
-      integer, intent(in) :: km                ! Original vertical dimension
-      integer, intent(in) :: kn                ! Target vertical dimension
-
-      real, intent(in) ::  pe1(i1:i2,km+1)     ! pressure at layer edges 
-                                               ! (from model top to bottom surface)
-                                               ! in the original vertical coordinate
-      real, intent(in) ::  pe2(i1:i2,kn+1)     ! pressure at layer edges 
-                                               ! (from model top to bottom surface)
-                                               ! in the new vertical coordinate
-      real, intent(in) ::  q1(ibeg:iend,jbeg:jend,km) ! Field input
-      real, intent(in) ::  dp2(i1:i2,kn)
-      real, intent(in) ::  q_min
-      integer, intent(in) :: k1(i1:i2,km), k2(i1:i2,km), alg(i1:i2,km)
-! !INPUT/OUTPUT PARAMETERS:
-      real, intent(inout):: q2(i1:i2,kn) ! Field output
-! !LOCAL VARIABLES:
-      real   qs(i1:i2)
-      real   dp1(i1:i2,km)
-      real   q4(4,i1:i2,km)
-      real   pl, pr, qsum, dp, esl
-
-      integer i, k, l, m, k0, lp
-
-      do k=1,km
-         do i=i1,i2
-             dp1(i,k) = pe1(i,k+1) - pe1(i,k)
-            q4(1,i,k) = q1(i,j,k)
-         enddo
-      enddo
-
-! Compute vertical subgrid distribution
-   if ( kord >7 ) then
-        call  scalar_profile( qs, q4, dp1, km, i1, i2, iv, kord, q_min )
-   else
-        call ppm_profile( q4, dp1, km, i1, i2, iv, kord )
-   endif
-
-! Mapping
-      do i=i1,i2
-      do k=1,kn
-         l  = k1(i,k)
-         lp = k2(i,k)
-         pl = (pe2(i,k)-pe1(i,l)) / dp1(i,l)
-         if (alg(i,k) == 1) then
-! entire new grid is within the original grid
-            pr = (pe2(i,k+1)-pe1(i,l)) / dp1(i,l)
-            q2(i,k) = q4(2,i,l) + 0.5*(q4(4,i,l)+q4(3,i,l)-q4(2,i,l))  &
-                       *(pr+pl)-q4(4,i,l)*r3*(pr*(pr+pl)+pl**2)
-         elseif (alg(i,k) == 2) then
-! Fractional area...
-            qsum = (pe1(i,l+1)-pe2(i,k))*(q4(2,i,l)+0.5*(q4(4,i,l)+   &
-                    q4(3,i,l)-q4(2,i,l))*(1.+pl)-q4(4,i,l)*           &
-                     (r3*(1.+pl*(1.+pl))))
-            do m=l+1,lp
-! locate the bottom edge: pe2(i,k+1)
-               if (m < lp) then
-                  ! Whole layer..
-                  qsum = qsum + dp1(i,m)*q4(1,i,m)
-               else
-                   dp = pe2(i,k+1)-pe1(i,m)
-                  esl = dp / dp1(i,m)
-                 qsum = qsum + dp*(q4(2,i,m)+0.5*esl*               &
-                       (q4(3,i,m)-q4(2,i,m)+q4(4,i,m)*(1.-r23*esl)))
-               endif
-            enddo
-            q2(i,k) = qsum / dp2(i,k)
-         endif
-      enddo
-      enddo
-
- end subroutine map1_q2
+ end subroutine map_layerk
 
 
  subroutine scalar_profile(qs, a4, delp, km, i1, i2, iv, kord, qmin)
