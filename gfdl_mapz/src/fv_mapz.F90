@@ -21,7 +21,8 @@
 ! This revision may actually produce rounding level differences due to the elimination of KS to compute
 ! pressure level for remapping.
 module fv_mapz_mod
-use test, only: in_layer, map_level_k, with_fractional_parts
+use test, only: in_layer, map_level_k, with_fractional_parts, &
+                positive_definite_limiter, standard_ppm_limiter, full_monotonicity_limiter
 
   implicit none
 
@@ -144,126 +145,158 @@ contains
   integer, dimension(is:ie+1, js:je+1, km+1) :: k1 !< Upper bound index for pe2 relative to pe1.
   integer, dimension(is:ie+1, js:je+1, km+1) :: k2 !< Upper bound index for pe2 relative to pe1.
   real, dimension(is:ie, js:je, km+1) :: pn1 !< Analog of pe1
+  real, dimension(:,:), allocatable :: rsin2
+  real, dimension(:,:), allocatable :: cosa_s
+  real, dimension(:,:), allocatable :: area
 
-    k1k = rdgas/cv_air   ! akap / (1.-akap) = rg/Cv=0.4
-    rg = rdgas
-    rcp = 1./ cp
-    rrg = -rdgas/grav
+  k1k = rdgas/cv_air   ! akap / (1.-akap) = rg/Cv=0.4
+  rg = rdgas
+  rcp = 1./ cp
+  rrg = -rdgas/grav
+  allocate(rsin2(size(gridstruct%rsin2, 1), size(gridstruct%rsin2, 2)))
+  rsin2(:,:) = gridstruct%rsin2(:,:)
+  allocate(cosa_s(size(gridstruct%cosa_s, 1), size(gridstruct%cosa_s, 2)))
+  cosa_s(:,:) = gridstruct%cosa_s(:,:)
+  allocate(area(size(gridstruct%area, 1), size(gridstruct%area, 2)))
+  area(:,:) = gridstruct%area(:,:)
 
-    do k = 1, km+1
-       do j=js,je+1
-          do i=is,ie
-             !Swap j and k.
-             pe1(i,j,k) = pe(i,k,j)
-          enddo
-       enddo
-    enddo
-    do j=js,je+1
-       do i=is,ie
-          !Store TOA and surface pressures.
-          pe2(i,j,   1) = ptop
-          pe2(i,j,km+1) = pe(i,km+1,j)
-       enddo
-    enddo
-    ! update ps
-    do j=js,je
-       do i=is,ie
-          ps(i,j) = pe1(i,j,km+1)
-       enddo
-    enddo
+!$acc enter data copyin(ptop, km, is, ie, js, je, kord_tm, hydrostatic, akap, k1k, rrg, &
+!$acc                   cp_air)
 
 
 
-    if ( kord_tm < 0 ) then
-       ! Note: pt at this stage is Theta_v
-       if ( hydrostatic ) then
-          ! Transform virtual pt to virtual Temp
-          do k=1,km
-             do j=js,je
-                do i=is,ie
-                   pt(i,j,k) = pt(i,j,k)*(pk(i,j,k+1)-pk(i,j,k))/(akap*(peln(i,k+1,j)-peln(i,k,j)))
-                enddo
-             enddo
-          enddo
-       else
-          ! Transform "density pt" to "density temp"
-          do k=1,km
-             do j=js,je
-                do i=is,ie
-                   pt(i,j,k) = pt(i,j,k)*exp(k1k*log(rrg*delp(i,j,k)/delz(i,j,k)*pt(i,j,k)))
-                enddo
-             enddo
-          enddo
-       endif         ! hydro test
-    elseif ( hydrostatic ) then
-       call pkez(km, is, ie, js, je, pe, pk, akap, peln, pkz, ptop)
-       ! Compute cp*T + KE
-       do k=1,km
-          do j=js,je
-             do i=is,ie
-                te(i,j,k) = 0.25*gridstruct%rsin2(i,j)*(u(i,j,k)**2+u(i,j+1,k)**2 +  &
-                     v(i,j,k)**2+v(i+1,j,k)**2 -  &
-                     (u(i,j,k)+u(i,j+1,k))*(v(i,j,k)+v(i+1,j,k))*gridstruct%cosa_s(i,j))  &
-                     + cp_air*pt(i,j,k)*pkz(i,j,k)
-             enddo
-          enddo
-       enddo
-    endif
-    if ( .not. hydrostatic ) then
-       do k=1,km
-          do j=js,je
-             do i=is,ie
-                delz(i,j,k) = -delz(i,j,k) / delp(i,j,k) ! ="specific volume"/grav
-             enddo
-          enddo
-       enddo
-    endif
 
-    !
-    ! Hybrid sigma-P coordinate:
-    !
-    do k=2,km
-       do j=js,je
-          do i=is,ie
-             pe2(i,j,k) = ak(k) + bk(k)*pe(i,km+1,j)
+!!$acc enter data copyin(pe, ps, pt, pk, peln, delp, delz, pkz, rsin2, cosa_s, area, &
+!!$acc                   te, u, v, ak, bk, dp2, &
+!!$acc                   ptop, km, is, ie, js, je, kord_tm, hydrostatic, akap, k1k, rrg, cp_air, &
+!!$acc     pe1, pe2)
+
+
+
+
+!$acc kernels
+!$acc loop collapse(3)
+  do k = 1, km+1
+    do j = js, je+1
+      do i= is, ie
+        !Swap j and k.
+        pe1(i,j,k) = pe(i,k,j)
+      enddo
+    enddo
+  enddo
+!$acc loop collapse(2)
+  do j = js, je+1
+    do i = is, ie
+      !Store TOA and surface pressures.
+      pe2(i,j,1) = ptop
+      pe2(i,j,km+1) = pe(i,km+1,j)
+    enddo
+  enddo
+!$acc loop collapse(2)
+  do j = js, je
+    do i = is, ie
+      !Update ps
+      ps(i,j) = pe1(i,j,km+1)
+    enddo
+  enddo
+
+  if (kord_tm .lt. 0) then
+    !Note: pt at this stage is Theta_v
+    if (hydrostatic) then
+      !Transform virtual pt to virtual Temp
+      !$acc loop collapse(3)
+      do k = 1, km
+        do j = js, je
+          do i = is, ie
+            pt(i,j,k) = pt(i,j,k)*(pk(i,j,k+1) - pk(i,j,k))/(akap*(peln(i,k+1,j) - peln(i,k,j)))
           enddo
-       enddo
-    enddo
-    do k=1,km
-       do j=js,je
-          do i=is,ie
-             dp2(i,j,k) = pe2(i,j,k+1) - pe2(i,j,k)
-             !---update delp
-             delp(i,j,k) = dp2(i,j,k)
+        enddo
+      enddo
+    else
+      !Transform "density pt" to "density temp"
+      !$acc loop collapse(3)
+      do k = 1, km
+        do j = js, je
+          do i = is, ie
+            pt(i,j,k) = pt(i,j,k)*exp(k1k*log(rrg*delp(i,j,k)/delz(i,j,k)*pt(i,j,k)))
           enddo
-       enddo
+        enddo
+      enddo
+    endif !hydro test
+  elseif (hydrostatic) then
+    call pkez(km, is, ie, js, je, pe, pk, akap, peln, pkz, ptop)
+    !Compute cp*T + KE
+!$acc loop collapse(3)
+    do k = 1, km
+      do j = js, je
+        do i = is, ie
+          te(i,j,k) = 0.25*rsin2(i,j)*(u(i,j,k)**2+u(i,j+1,k)**2 +  &
+                      v(i,j,k)**2+v(i+1,j,k)**2 -  &
+                      (u(i,j,k)+u(i,j+1,k))*(v(i,j,k)+v(i+1,j,k))*cosa_s(i,j))  &
+                      + cp_air*pt(i,j,k)*pkz(i,j,k)
+        enddo
+      enddo
     enddo
-    !------------------
-    ! Compute p**Kappa
-    !------------------
-    do k=1,km+1
-       do j=js,je
-          do i=is,ie
-             pk1(i,j,k) = pk(i,j,k)
-          enddo
-       enddo
+  endif
+  if (.not. hydrostatic) then
+!$acc loop collapse(3)
+    do k = 1, km
+      do j = js, je
+        do i = is, ie
+          delz(i,j,k) = -delz(i,j,k)/delp(i,j,k) ! ="specific volume"/grav
+        enddo
+      enddo
     enddo
-    do j=js,je
-       do i=is,ie
-          pn2(i,j,   1) = peln(i,   1,j)
-          pn2(i,j,km+1) = peln(i,km+1,j)
-          pk2(i,j,   1) = pk1(i,j,   1)
-          pk2(i,j,km+1) = pk1(i,j,km+1)
-       enddo
+  endif
+
+
+  !Hybrid sigma-P coordinate:
+!$acc loop collapse(3)
+  do k = 2, km
+    do j = js, je
+      do i = is, ie
+        pe2(i,j,k) = ak(k) + bk(k)*pe(i,km+1,j)
+      enddo
     enddo
-    do k=2,km
-       do j=js,je
-          do i=is,ie
-             pn2(i,j,k) = log(pe2(i,j,k))
-             pk2(i,j,k) = exp(akap*pn2(i,j,k))
-          enddo
-       enddo
+  enddo
+!$acc loop collapse(3)
+  do k = 1, km
+    do j = js, je
+      do i = is, ie
+        dp2(i,j,k) = pe2(i,j,k+1) - pe2(i,j,k)
+        delp(i,j,k) = dp2(i,j,k)
+      enddo
     enddo
+  enddo
+
+  !Compute p**Kappa
+!$acc loop collapse(3)
+  do k = 1, km+1
+    do j = js, je
+      do i = is, ie
+        pk1(i,j,k) = pk(i,j,k)
+      enddo
+    enddo
+  enddo
+!$acc loop collapse(2)
+  do j = js, je
+    do i = is, ie
+      pn2(i,j,1) = peln(i,1,j)
+      pn2(i,j,km+1) = peln(i,km+1,j)
+      pk2(i,j,1) = pk1(i,j,1)
+      pk2(i,j,km+1) = pk1(i,j,km+1)
+    enddo
+  enddo
+!$acc loop collapse(3)
+  do k = 2, km
+    do j = js, je
+      do i = is, ie
+        pn2(i,j,k) = log(pe2(i,j,k))
+        pk2(i,j,k) = exp(akap*pn2(i,j,k))
+      enddo
+    enddo
+  enddo
+!$acc end kernels
   
   !Find the level remapping bounds.  This is the same for all tracers.
   call map_level_k(is, ie, js, je, km, km, pe1, pe2, k1, k2)
@@ -637,11 +670,13 @@ contains
        endif
     endif
 
-  end subroutine Lagrangian_to_Eulerian
+!$acc exit data
+end subroutine Lagrangian_to_Eulerian
 
 
   subroutine pkez(km, ifirst, ilast, jfirst, jlast, &
        pe, pk, akap, peln, pkz, ptop)
+!$acc routine seq
     ! !INPUT PARAMETERS:
     integer, intent(in):: km
     integer, intent(in):: ifirst, ilast        ! Latitude strip
@@ -1069,7 +1104,7 @@ end subroutine map_scalar
             a4(4,i,j,1) = 3.*(2.*a4(1,i,j,1) - (a4(2,i,j,1)+a4(3,i,j,1)))
          enddo
       enddo
-      call cs_limiters(i1,i2,j1,j2,1,1,extm(i1,j1,1), a4(1,i1,j1,1), 1)
+      call cs_limiters(i1,i2,j1,j2,1,1,extm(i1:,j1:,:), a4(:,i1:,j1:,:), 1)
    endif
    ! k=2
    do j=j1,j2
@@ -1077,7 +1112,7 @@ end subroutine map_scalar
          a4(4,i,j,2) = 3.*(2.*a4(1,i,j,2) - (a4(2,i,j,2)+a4(3,i,j,2)))
       enddo
    enddo
-   call cs_limiters(i1,i2,j1,j2,2,2,extm(i1,j1,2), a4(1,i1,j1,2), 2)
+   call cs_limiters(i1,i2,j1,j2,2,2,extm(i1:,j1:,2:), a4(:,i1:,j1:,2:), 2)
    !-------------------------------------
    ! Huynh's 2nd constraint for interior:
    !-------------------------------------
@@ -1271,7 +1306,7 @@ end subroutine map_scalar
       enddo
    endif
    ! Additional constraint to ensure positivity
-   if ( iv==0 ) call cs_limiters(i1,i2,j1,j2,3,km-2, extm(i1,j1,3), a4(1,i1,j1,3), 0)
+   if ( iv==0 ) call cs_limiters(i1,i2,j1,j2,3,km-2, extm(i1:,j1:,3:), a4(:,i1:,j1:,3:), 0)
    !----------------------------------
    ! Bottom layer subgrid constraints:
    !----------------------------------
@@ -1296,8 +1331,8 @@ end subroutine map_scalar
          enddo
       enddo
    enddo
-   call cs_limiters(i1,i2,j1,j2,km-1,km-1, extm(i1,j1,km-1), a4(1,i1,j1,km-1), 2)
-   call cs_limiters(i1,i2,j1,j2,km,km, extm(i1,j1,km), a4(1,i1,j1,km), 1)
+   call cs_limiters(i1,i2,j1,j2,km-1,km-1, extm(i1:,j1:,km-1:), a4(:,i1:,j1:,km-1:), 2)
+   call cs_limiters(i1,i2,j1,j2,km,km, extm(i1:,j1:,km:), a4(:,i1:,j1:,km:), 1)
 
  end subroutine scalar_profile
 
@@ -1323,6 +1358,7 @@ end subroutine map_scalar
    real   pmp_1, lac_1, pmp_2, lac_2
    integer i, j, k, im
 
+!!!$acc kernels
    if ( iv .eq. -2 ) then
       do j=j1,j2
          do i=i1,i2
@@ -1389,8 +1425,10 @@ end subroutine map_scalar
          enddo
       enddo
    endif
+!!!$acc end kernels
    !----- Perfectly linear scheme --------------------------------
    if ( abs(kord) > 16 ) then
+!!!$acc kernels
       do k=1,km
          do j=j1,j2
             do i=i1,i2
@@ -1400,10 +1438,12 @@ end subroutine map_scalar
             enddo
          enddo
       enddo
+!!!$acc end kernels
       return
    endif
    !----- Perfectly linear scheme --------------------------------
 
+!!$acc kernels
    !------------------
    ! Apply constraints
    !------------------
@@ -1510,7 +1550,7 @@ end subroutine map_scalar
             a4(4,i,j,2) = 3.*(2.*a4(1,i,j,2) - (a4(2,i,j,2)+a4(3,i,j,2)))
          enddo
       enddo
-      call cs_limiters(i1,i2,j1,j2,1,1, extm(i1,j1,1), a4(1,i1,j1,1), 1)
+      call cs_limiters(i1,i2,j1,j2,1,1, extm(i1:,j1:,:), a4(:,i1:,j1:,:), 1)
    else
       do j=j1,j2
          do i=i1,i2
@@ -1518,7 +1558,7 @@ end subroutine map_scalar
          enddo
       enddo
    endif
-   call cs_limiters(i1,i2,j1,j2,2,2, extm(i1,j1,2), a4(1,i1,j1,2), 2)
+   call cs_limiters(i1,i2,j1,j2,2,2, extm(i1:,j1:,2:), a4(:,i1:,j1:,2:), 2)
 
    !-------------------------------------
    ! Huynh's 2nd constraint for interior:
@@ -1688,7 +1728,7 @@ end subroutine map_scalar
    endif
 
    ! Additional constraint to ensure positivity
-   if ( iv==0 ) call cs_limiters(i1,i2,j1,j2,3,km-2, extm(i1,j1,3), a4(1,i1,j1,3), 0)
+   if ( iv==0 ) call cs_limiters(i1,i2,j1,j2,3,km-2, extm(i1:,j1:,3:), a4(:,i1:,j1:,3:), 0)
    !----------------------------------
    ! Bottom layer subgrid constraints:
    !----------------------------------
@@ -1713,100 +1753,58 @@ end subroutine map_scalar
          enddo
       enddo
    enddo
-   call cs_limiters(i1,i2,j1,j2,km-1,km-1, extm(i1,j1,km-1), a4(1,i1,j1,km-1), 2)
-   call cs_limiters(i1,i2,j1,j2,km,km, extm(i1,j1,km), a4(1,i1,j1,km), 1)
-
+   call cs_limiters(i1,i2,j1,j2,km-1,km-1, extm(i1:,j1:,km-1:), a4(:,i1:,j1:,km-1:), 2)
+   call cs_limiters(i1,i2,j1,j2,km,km, extm(i1:,j1:,km:), a4(:,i1:,j1:,km:), 1)
+!!$acc end kernels
  end subroutine cs_profile
 
 
- subroutine cs_limiters(i1, i2, j1, j2, k1, k2, extm, a4, iv)
-   integer, intent(in) :: i1, i2, j1, j2, k1, k2
-   integer, intent(in) :: iv
-   logical, intent(in) :: extm(i1:i2,j1:j2,k1:k2)
-   real , intent(inout) :: a4(4,i1:i2,j1:j2,k1:k2)   ! PPM array
-   ! !LOCAL VARIABLES:
-   real  da1, da2, a6da
-   integer i,j,k
-   if ( iv==0 ) then
-      ! Positive definite constraint
-      do j=j1,j2
-         do k=k1,k2
-            do i=i1,i2
-               if( a4(1,i,j,k)<=0.) then
-                  a4(2,i,j,k) = a4(1,i,j,k)
-                  a4(3,i,j,k) = a4(1,i,j,k)
-                  a4(4,i,j,k) = 0.
-               else
-                  if( abs(a4(3,i,j,k)-a4(2,i,j,k)) < -a4(4,i,j,k) ) then
-                     if( (a4(1,i,j,k)+0.25*(a4(3,i,j,k)-a4(2,i,j,k))**2/a4(4,i,j,k)+a4(4,i,j,k)*r12) < 0. ) then
-                        ! local minimum is negative
-                        if( a4(1,i,j,k)<a4(3,i,j,k) .and. a4(1,i,j,k)<a4(2,i,j,k) ) then
-                           a4(3,i,j,k) = a4(1,i,j,k)
-                           a4(2,i,j,k) = a4(1,i,j,k)
-                           a4(4,i,j,k) = 0.
-                        elseif( a4(3,i,j,k) > a4(2,i,j,k) ) then
-                           a4(4,i,j,k) = 3.*(a4(2,i,j,k)-a4(1,i,j,k))
-                           a4(3,i,j,k) = a4(2,i,j,k) - a4(4,i,j,k)
-                        else
-                           a4(4,i,j,k) = 3.*(a4(3,i,j,k)-a4(1,i,j,k))
-                           a4(2,i,j,k) = a4(3,i,j,k) - a4(4,i,j,k)
-                        endif
-                     endif
-                  endif
-               endif
-            enddo
-         enddo
-      enddo
-   elseif ( iv==1 ) then
-      do j=j1,j2
-         do k=k1,k2
-            do i=i1,i2
-               if( (a4(1,i,j,k)-a4(2,i,j,k))*(a4(1,i,j,k)-a4(3,i,j,k))>=0. ) then
-                  a4(2,i,j,k) = a4(1,i,j,k)
-                  a4(3,i,j,k) = a4(1,i,j,k)
-                  a4(4,i,j,k) = 0.
-               else
-                  da1  = a4(3,i,j,k) - a4(2,i,j,k)
-                  da2  = da1**2
-                  a6da = a4(4,i,j,k)*da1
-                  if(a6da < -da2) then
-                     a4(4,i,j,k) = 3.*(a4(2,i,j,k)-a4(1,i,j,k))
-                     a4(3,i,j,k) = a4(2,i,j,k) - a4(4,i,j,k)
-                  elseif(a6da > da2) then
-                     a4(4,i,j,k) = 3.*(a4(3,i,j,k)-a4(1,i,j,k))
-                     a4(2,i,j,k) = a4(3,i,j,k) - a4(4,i,j,k)
-                  endif
-               endif
-            enddo
-         enddo
-      enddo
-   else
-      ! Standard PPM constraint
-      do j=j1,j2
-         do k=k1,k2
-            do i=i1,i2
-               if( extm(i,j,k) ) then
-                  a4(2,i,j,k) = a4(1,i,j,k)
-                  a4(3,i,j,k) = a4(1,i,j,k)
-                  a4(4,i,j,k) = 0.
-               else
-                  da1  = a4(3,i,j,k) - a4(2,i,j,k)
-                  da2  = da1**2
-                  a6da = a4(4,i,j,k)*da1
-                  if(a6da < -da2) then
-                     a4(4,i,j,k) = 3.*(a4(2,i,j,k)-a4(1,i,j,k))
-                     a4(3,i,j,k) = a4(2,i,j,k) - a4(4,i,j,k)
-                  elseif(a6da > da2) then
-                     a4(4,i,j,k) = 3.*(a4(3,i,j,k)-a4(1,i,j,k))
-                     a4(2,i,j,k) = a4(3,i,j,k) - a4(4,i,j,k)
-                  endif
-               endif
-            enddo
-         enddo
-      enddo
-   endif
- end subroutine cs_limiters
+subroutine cs_limiters(i1, i2, j1, j2, k1, k2, extm, a4, iv)
+  integer, intent(in) :: i1
+  integer, intent(in) :: i2
+  integer, intent(in) :: j1
+  integer, intent(in) :: j2
+  integer, intent(in) :: k1
+  integer, intent(in) :: k2
+  integer, intent(in) :: iv
+  logical, dimension(i1:, j1:, k1:), intent(in) :: extm
+  real, dimension(:, i1:, j1:, k1:), intent(inout) :: a4
 
+  integer :: i
+  integer :: j
+  integer :: k
+  real, dimension(i1:i2, j1:j2, k1:k2) :: dm
+
+  if (iv .eq. 0) then
+    call positive_definite_limiter(i1, i2, j1, j2, k1, k2, a4)
+  elseif (iv .eq. 1) then
+    do k = k1, k2
+      do j = j1, j2
+        do i = i1, i2
+          if ((a4(1,i,j,k) - a4(2,i,j,k))*(a4(1,i,j,k) - a4(3,i,j,k)) .ge. 0.) then
+            dm(i,j,k) = 0.
+          else
+            dm(i,j,k) = 1.
+          endif
+        enddo
+      enddo
+    enddo
+    call standard_ppm_limiter(i1, i2, j1, j2, k1, k2, dm, a4)
+  else
+    do k = k1, k2
+      do j = j1, j2
+        do i = i1, i2
+          if (extm(i,j,k)) then
+            dm(i,j,k) = 0.
+          else
+            dm(i,j,k) = 1.
+          endif
+        enddo
+      enddo
+    enddo
+    call standard_ppm_limiter(i1, i2, j1, j2, k1, k2, dm, a4)
+  endif
+end subroutine cs_limiters
 
 
  subroutine ppm_profile(a4, delp, km, i1, i2, j1, j2, iv, kord)
@@ -1847,6 +1845,7 @@ end subroutine map_scalar
    real  a1, a2, c1, c2, c3, d1, d2
    real  qm, dq, lac, qmp, pmp
 
+!$acc kernels
    km1 = km - 1
    it = i2 - i1 + 1
    do k=2,km
@@ -2013,7 +2012,8 @@ end subroutine map_scalar
          enddo
       enddo
    enddo
-   call ppm_limiters(i1,i2,j1,j2,1,2,dc(i1,j1,1), a4(1,i1,j1,1), 0)
+!$acc end kernels
+   call ppm_limiters(i1,i2,j1,j2,1,2,dc(i1:,j1:,:), a4(:,i1:,j1:,:), 0)
 
    if(kord >= 7) then
       !-----------------------
@@ -2064,7 +2064,7 @@ end subroutine map_scalar
          enddo
       enddo
       ! Additional constraint to ensure positivity when kord=7
-      if (iv == 0 .and. kord >= 6 )  call ppm_limiters(i1,i2,j1,j2,3,km-2,dc(i1,j1,3), a4(1,i1,j1,3), 2)
+      if (iv == 0 .and. kord >= 6 )  call ppm_limiters(i1,i2,j1,j2,3,km-2,dc(i1:,j1:,3:), a4(:,i1:,j1:,3:), 2)
 
    else
 
@@ -2080,7 +2080,7 @@ end subroutine map_scalar
             enddo
          enddo
       endif
-      if(kord/=6) call ppm_limiters(i1,i2,j1,j2,3,km-2,dc(i1,j1,3), a4(1,i1,j1,3), lmt)
+      if(kord/=6) call ppm_limiters(i1,i2,j1,j2,3,km-2,dc(i1:,j1:,3:), a4(:,i1:,j1:,3:), lmt)
    endif
 
    do k=km1,km
@@ -2091,102 +2091,33 @@ end subroutine map_scalar
       enddo
    enddo
 
-   call ppm_limiters(i1,i2,j1,j2,km1,km,dc(i1,j1,km1), a4(1,i1,j1,km1), 0)
+   call ppm_limiters(i1,i2,j1,j2,km1,km,dc(i1:,j1:,km1:), a4(:,i1:,j1:,km1:), 0)
 
  end subroutine ppm_profile
 
 
- subroutine ppm_limiters(i1,i2,j1,j2,k1,k2,dm, a4, lmt)
-   ! !INPUT PARAMETERS:
-   integer, intent(in) :: i1,i2,j1,j2,k1,k2
-   real , intent(in):: dm(i1:i2,j1:j2,k1:k2)     ! the linear slope
-   integer, intent(in) :: lmt       ! 0: Standard PPM constraint
-   ! 1: Improved full monotonicity constraint (Lin)
-   ! 2: Positive definite constraint
-   ! 3: do nothing (return immediately)
-   ! !INPUT/OUTPUT PARAMETERS:
-   real , intent(inout) :: a4(4,i1:i2,j1:j2,k1:k2)   ! PPM array
-   ! AA <-- a4(1,i)
-   ! AL <-- a4(2,i)
-   ! AR <-- a4(3,i)
-   ! A6 <-- a4(4,i)
-   ! !LOCAL VARIABLES:
-   real  qmp
-   real  da1, da2, a6da
-   real  fmin
-   integer i, j, k
+subroutine ppm_limiters(i1, i2, j1, j2, k1, k2, dm, a4, lmt)
+  integer, intent(in) :: i1
+  integer, intent(in) :: i2
+  integer, intent(in) :: j1
+  integer, intent(in) :: j2
+  integer, intent(in) :: k1
+  integer, intent(in) :: k2
+  real, dimension(i1:, j1:, k1:), intent(in) :: dm
+  integer, intent(in) :: lmt
+  real, intent(inout) :: a4(:, i1:, j1:, k1:)
 
-   ! Developer: S.-J. Lin
-
-   if ( lmt == 3 ) return
-
-   if(lmt == 0) then
-      ! Standard PPM constraint
-      do k = k1,k2
-         do j=j1,j2
-            do i=i1,i2
-               if(dm(i,j,k) == 0.) then
-                  a4(2,i,j,k) = a4(1,i,j,k)
-                  a4(3,i,j,k) = a4(1,i,j,k)
-                  a4(4,i,j,k) = 0.
-               else
-                  da1  = a4(3,i,j,k) - a4(2,i,j,k)
-                  da2  = da1**2
-                  a6da = a4(4,i,j,k)*da1
-                  if(a6da < -da2) then
-                     a4(4,i,j,k) = 3.*(a4(2,i,j,k)-a4(1,i,j,k))
-                     a4(3,i,j,k) = a4(2,i,j,k) - a4(4,i,j,k)
-                  elseif(a6da > da2) then
-                     a4(4,i,j,k) = 3.*(a4(3,i,j,k)-a4(1,i,j,k))
-                     a4(2,i,j,k) = a4(3,i,j,k) - a4(4,i,j,k)
-                  endif
-               endif
-            enddo
-         enddo
-      enddo
-
-   elseif (lmt == 1) then
-
-      ! Improved full monotonicity constraint (Lin 2004)
-      ! Note: no need to provide first guess of A6 <-- a4(4,i,j,k)
-      do k = k1,k2
-         do j=j1,j2
-            do i=i1,i2
-               qmp = 2.*dm(i,j,k)
-               a4(2,i,j,k) = a4(1,i,j,k)-sign(min(abs(qmp),abs(a4(2,i,j,k)-a4(1,i,j,k))), qmp)
-               a4(3,i,j,k) = a4(1,i,j,k)+sign(min(abs(qmp),abs(a4(3,i,j,k)-a4(1,i,j,k))), qmp)
-               a4(4,i,j,k) = 3.*( 2.*a4(1,i,j,k) - (a4(2,i,j,k)+a4(3,i,j,k)) )
-            enddo
-         enddo
-      enddo
-   elseif (lmt == 2) then
-
-      ! Positive definite constraint
-      do k = k1,k2
-         do j=j1,j2
-            do i=i1,i2
-               if( abs(a4(3,i,j,k)-a4(2,i,j,k)) < -a4(4,i,j,k) ) then
-                  fmin = a4(1,i,j,k)+0.25*(a4(3,i,j,k)-a4(2,i,j,k))**2/a4(4,i,j,k)+a4(4,i,j,k)*r12
-                  if( fmin < 0. ) then
-                     if(a4(1,i,j,k)<a4(3,i,j,k) .and. a4(1,i,j,k)<a4(2,i,j,k)) then
-                        a4(3,i,j,k) = a4(1,i,j,k)
-                        a4(2,i,j,k) = a4(1,i,j,k)
-                        a4(4,i,j,k) = 0.
-                     elseif(a4(3,i,j,k) > a4(2,i,j,k)) then
-                        a4(4,i,j,k) = 3.*(a4(2,i,j,k)-a4(1,i,j,k))
-                        a4(3,i,j,k) = a4(2,i,j,k) - a4(4,i,j,k)
-                     else
-                        a4(4,i,j,k) = 3.*(a4(3,i,j,k)-a4(1,i,j,k))
-                        a4(2,i,j,k) = a4(3,i,j,k) - a4(4,i,j,k)
-                     endif
-                  endif
-               endif
-            enddo
-         enddo
-      enddo
-   endif
-
- end subroutine ppm_limiters
+  if ( lmt .eq. 3) then
+    return
+  endif
+  if (lmt .eq. 0) then
+    call standard_ppm_limiter(i1, i2, j1, j2, k1, k2, dm, a4)
+  elseif (lmt .eq. 1) then
+    call full_monotonicity_limiter(i1, i2, j1, j2, k1, k2, dm, a4)
+  elseif (lmt .eq. 2) then
+    call positive_definite_limiter(i1, i2, j1, j2, k1, k2, a4)
+  endif
+end subroutine ppm_limiters
 
 
  real function g_sum(p, ifirst, ilast, jfirst, jlast, ngc, area)
